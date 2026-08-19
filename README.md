@@ -3,8 +3,9 @@
 <!-- markdownlint-disable MD013 -->
 
 Shuttle provides production-grade typed composition primitives for Go. Its v1
-scope is intentionally narrow: composable `predicate.Func[T]` values, an eager
-`Optional[T]`, and a lazy, ordered, sequential `Stream[T]`.
+scope is intentionally narrow: composable `comparator.Func[T]` and
+`predicate.Func[T]` values, an eager `Optional[T]`, and a lazy, ordered,
+sequential `Stream[T]`.
 
 Shuttle requires Go 1.27 or newer because its fluent type-changing operations
 use generic methods. Development before the stable Go 1.27 release is validated
@@ -12,6 +13,11 @@ with the pinned `go1.27rc3` toolchain.
 
 ## Packages
 
+- [`comparator`](https://pkg.go.dev/github.com/imbrooklyn/shuttle/comparator)
+  provides reusable three-way ordering descriptors with natural ordering,
+  projection, per-level fluent direction, complete-order reversal, and
+  lexicographic composition. A `comparator.Func[T]` is directly accepted by
+  Shuttle and standard-library comparison APIs.
 - [`predicate`](https://pkg.go.dev/github.com/imbrooklyn/shuttle/predicate)
   provides a small named function type, short-circuiting composition, equality
   and projection adapters, and typed-nil-aware predicates. A `predicate.Func[T]`
@@ -36,12 +42,18 @@ import (
     "fmt"
     "strings"
 
+    "github.com/imbrooklyn/shuttle/comparator"
     "github.com/imbrooklyn/shuttle/optional"
     "github.com/imbrooklyn/shuttle/predicate"
     "github.com/imbrooklyn/shuttle/stream"
 )
 
 func main() {
+    type rankedName struct {
+        Name  string
+        Score int
+    }
+
     nonBlank := predicate.Func[string](func(value string) bool {
         return strings.TrimSpace(value) != ""
     })
@@ -56,8 +68,20 @@ func main() {
         Filter(nonBlank).
         Collect()
 
+    byScoreThenNameDescending := comparator.
+        By(func(value rankedName) int { return value.Score }).
+        ThenByDescending(func(value rankedName) string {
+            return value.Name
+        })
+    ranked := stream.FromSlice([]rankedName{
+        {Name: "Brooklyn", Score: 2},
+        {Name: "Shuttle", Score: 1},
+        {Name: "Optional", Score: 2},
+    }).SortedFunc(byScoreThenNameDescending).Collect()
+
     fmt.Println(name)
     fmt.Println(values)
+    fmt.Println(ranked)
 }
 ```
 
@@ -66,7 +90,37 @@ Output:
 ```text
 BROOKLYN
 [Brooklyn Shuttle]
+[{Shuttle 1} {Optional 2} {Brooklyn 2}]
 ```
+
+The complete comparator API is deliberately small:
+
+```go
+type Func[T any] func(left, right T) int
+
+func Ordered[T cmp.Ordered]() Func[T]
+func By[T any, K cmp.Ordered](key func(T) K) Func[T]
+func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
+func On[A, B any](project func(A) B, compare Func[B]) Func[A]
+func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+
+func (c Func[T]) Reverse() Func[T]
+func (c Func[T]) Then(others ...Func[T]) Func[T]
+func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
+func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+```
+
+Only a comparator result's sign is meaningful. `Then` evaluates ordering levels
+from left to right and stops at the first nonzero result. `Reverse` reverses the
+complete existing ordering without negating an arbitrary integer result, so it
+is safe even when a comparator returns `math.MinInt`. `ThenBy`,
+`ThenByDescending`, `ThenOn`, and `ThenOnDescending` append exactly one level
+and evaluate it only when every preceding level is equivalent. Ordered and
+custom projections run for left and then right exactly once per reached
+comparison; custom comparators receive those projected values in left-right
+order even for descending levels. Keys are not cached between comparisons.
 
 The complete predicate API is deliberately small:
 
@@ -113,8 +167,11 @@ produces `None`. This intentionally loses the presence bit for a present nil.
 
 ## Behavioral guarantees
 
-- Optional and Stream have useful zero values; a zero Func is an ordinary nil
-  function.
+- Optional and Stream have useful zero values; a zero comparator or predicate
+  Func is an ordinary nil function.
+- Comparator composition snapshots variadic descriptors, adds no
+  per-comparison allocation of its own, and neither caches keys nor starts
+  goroutines.
 - Predicate composition snapshots variadic descriptors, adds no
   per-evaluation allocation of its own, and neither caches results nor starts
   goroutines.
@@ -125,14 +182,15 @@ produces `None`. This intentionally loses the presence bit for a present nil.
 - Stateful traversal data is created separately for every traversal.
 - Runtime packages use only the Go standard library.
 
-Predicate values are safe for concurrent evaluation when their callbacks and
-captured values are safe for concurrent use. Shuttle adds no locks around
-caller-owned mutable state.
+Comparator and predicate values are safe for concurrent evaluation when their
+callbacks and captured values are safe for concurrent use. Shuttle adds no
+locks around caller-owned mutable state.
 
 Reflection is used only by `predicate.IsNil` and, through it,
 `predicate.IsNotNil`. This narrow exception is required to recognize a typed
-nil stored in an interface. Other predicate operations, Optional, and Stream do
-not use reflection for comparison, transformation, or composition.
+nil stored in an interface. Comparator, other predicate operations, Optional,
+and Stream do not use reflection for comparison, transformation, or
+composition.
 
 Reusable and single-use behavior comes from the underlying iterator source.
 Copying a Stream copies only its descriptor and never caches, forks, or rewinds
@@ -148,7 +206,7 @@ go1.27rc3 test -race ./...
 go1.27rc3 vet ./...
 ```
 
-All three packages include fuzz or property coverage and allocation-aware
+All four packages include fuzz or property coverage and allocation-aware
 benchmarks. CI distinguishes native tests and race tests from cross-compilation.
 
 ## Release strategy

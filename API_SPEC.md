@@ -36,7 +36,7 @@ All copies are shallow Go assignments unless this specification explicitly requi
 
 ### 2.1 Callback execution
 
-Callbacks and comparators execute synchronously and sequentially within one predicate evaluation, Optional operation, or Stream traversal. Shuttle must not invoke a user callback concurrently with itself and must not start worker goroutines. Callback side effects occur in the order documented for the operation.
+Callbacks and comparators execute synchronously and sequentially within one comparator or predicate evaluation, Optional operation, or Stream traversal. Shuttle must not invoke a user callback concurrently with itself and must not start worker goroutines. Callback side effects occur in the order documented for the operation.
 
 A Stream source must call `yield` serially and wait for each call to return. Concurrent calls to one traversal's `yield` are unsupported and may race or panic. Shuttle does not guarantee callback goroutine identity for an externally supplied source; it guarantees only that Shuttle introduces no callback concurrency or worker goroutine.
 
@@ -65,7 +65,7 @@ Go permits an interface type to satisfy `comparable` even though a particular dy
 
 ### 2.4 Immutability and thread safety
 
-Public value methods do not mutate an `Optional` or `Stream`, and predicate composition does not mutate an existing `Func`. That fact alone does not make referenced values, sources, callbacks, or destinations safe for concurrent access. Concurrent predicate evaluation or Stream traversal is supported only to the extent that every reached callback, captured value, source, and destination is safe for concurrent use. Shuttle adds no cross-evaluation or cross-traversal lock.
+Public value methods do not mutate an `Optional` or `Stream`, and comparator or predicate composition does not mutate an existing `Func`. That fact alone does not make referenced values, sources, callbacks, or destinations safe for concurrent access. Concurrent comparator or predicate evaluation and concurrent Stream traversal are supported only to the extent that every reached callback, captured value, source, and destination is safe for concurrent use. Shuttle adds no cross-evaluation or cross-traversal lock.
 
 Nil pointers to these value types are not a third logical state. Except for the explicit nil-receiver rule of `(*Optional[T]).UnmarshalJSON`, invoking a value-receiver method through a nil `*Optional[T]` or `*Stream[T]` has ordinary Go nil-pointer dereference behavior.
 
@@ -1334,11 +1334,210 @@ Explicit instantiation, such as `predicate.IsNil[*int]`, must also compile.
 
 The allocation statements assume values and callbacks do not escape because of caller code. Compiler escape behavior is validated with the target Go toolchain rather than guaranteed across all future compilers.
 
-## 6. Required examples
+## 6. Package `comparator`
+
+Import path:
+
+```go
+import "github.com/imbrooklyn/shuttle/comparator"
+```
+
+Package comparator imports only the standard library. Optional, predicate, and Stream must not import it.
+
+### 6.1 Complete public declaration inventory
+
+The package must export exactly the following v1 API:
+
+```go
+package comparator
+
+import "cmp"
+
+type Func[T any] func(left, right T) int
+
+func Ordered[T cmp.Ordered]() Func[T]
+func By[T any, K cmp.Ordered](key func(T) K) Func[T]
+func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
+func On[A, B any](project func(A) B, compare Func[B]) Func[A]
+func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+
+func (c Func[T]) Reverse() Func[T]
+func (c Func[T]) Then(others ...Func[T]) Func[T]
+func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
+func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+```
+
+There are no exported builder types, direction enums, options, aliases, sentinels, or validation errors. In particular, the package must not export `Asc`, `Desc`, `OnAscending`, `ThenOnAscending`, `ByFunc`, `ThenByFunc`, `Compare`, `Comparing`, `ThenComparing`, `Chain`, `Compose`, `Natural`, or `Default`.
+
+### 6.2 `Func` type and common comparison contract
+
+```go
+type Func[T any] func(left, right T) int
+```
+
+For `result := compare(left, right)`, only the sign is semantically meaningful:
+
+- `result < 0` orders left before right;
+- `result == 0` makes left and right equivalent at that ordering level; and
+- `result > 0` orders left after right.
+
+Result magnitude is not a public contract unless an individual constructor explicitly delegates to a standard-library function whose result is specified. Callers must supply comparators that define a strict weak ordering. Shuttle does not validate asymmetry, negative-relation transitivity, or equivalence transitivity. Consumer results are unspecified when the ordering is invalid; this does not denote Go language undefined behavior.
+
+The zero value of `Func[T]` is a nil function. Comparator must not reinterpret nil as equality, natural order, an identity, or a direction. Constructing a composition around nil is valid and does not invoke it. Evaluation panics through ordinary nil-function invocation only when execution reaches that descriptor. A descriptor skipped by lexicographic short-circuiting must not panic.
+
+All constructors and methods are construction-lazy. Within one evaluation, reached callbacks run synchronously, serially, and in their specified order. Comparator must not recover a panic, start a goroutine, acquire a global lock, use reflection, cache a key across evaluations, validate results, or retain state proportional to a sorted collection. Every evaluation repeats all callbacks required by its reached path.
+
+Function values and callback-captured references use ordinary shallow Go aliasing. Immutable compositions may be evaluated concurrently only when all reached callbacks, captures, projections, and compared values are safe for concurrent use. Comparator supplies no synchronization for caller-owned state.
+
+### 6.3 Constructors and projection adapters
+
+#### `Ordered`
+
+```go
+func Ordered[T cmp.Ordered]() Func[T]
+```
+
+Returns the natural ascending comparator implemented by `cmp.Compare(left, right)`. Named ordered types, integer boundaries, strings, floating-point NaNs, and signed zero follow `cmp.Compare` exactly. `Ordered` takes no value argument, so `T` must be explicitly instantiated, such as `Ordered[int]()`. Evaluation adds no allocation; construction has only bounded descriptor cost and may allocate if the instantiated generic function value escapes.
+
+#### `By`
+
+```go
+func By[T any, K cmp.Ordered](key func(T) K) Func[T]
+```
+
+Returns an ascending ordered-key comparator. Each reached evaluation must:
+
+1. invoke `key(left)` exactly once;
+2. invoke `key(right)` exactly once, only after the left call returns; and
+3. return `cmp.Compare(leftKey, rightKey)`.
+
+The two projected values may be held locally for that evaluation but must not be cached across evaluations. A left projection panic prevents the right projection; either projection panic prevents comparison. A nil key is accepted at construction and panics when the first reached projection is invoked.
+
+#### `ByDescending`
+
+```go
+func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
+```
+
+Has the same projection order, count, panic, and caching contract as `By`. After computing left and then right keys, it returns `cmp.Compare(rightKey, leftKey)`. Descending direction must not reverse projection callback order.
+
+#### `On`
+
+```go
+func On[A, B any](project func(A) B, compare Func[B]) Func[A]
+```
+
+Returns a comparator for arbitrary projected values and custom orderings. Each reached evaluation must:
+
+1. invoke `project(left)` exactly once;
+2. invoke `project(right)` exactly once, only after the left call returns; and
+3. invoke `compare(leftProjected, rightProjected)` exactly once.
+
+It returns the comparator result without interpreting its magnitude. A projection panic skips every later call; a comparator panic occurs only after both projections return. Nil callbacks follow the same reached-path rule. `On(project, time.Time.Compare)` is the canonical composition for a `time.Time` key because `time.Time` does not satisfy `cmp.Ordered`.
+
+#### `OnDescending`
+
+```go
+func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+```
+
+Has the same projection order, count, panic, nil, and caching contract as `On`. It invokes `compare(leftProjected, rightProjected)` exactly once and then maps a negative result to `1`, a positive result to `-1`, and zero to zero. It must not swap comparator arguments or compute `-result`; preserving left-right arguments keeps callback behavior predictable, and sign normalization handles `math.MinInt` without overflow. Descending direction is relative to the ordering represented by `compare`, regardless of how that comparator was constructed.
+
+### 6.4 Composition methods
+
+#### `Reverse`
+
+```go
+func (c Func[T]) Reverse() Func[T]
+```
+
+Returns a comparator that reverses the complete relation represented by `c`. Each evaluation invokes `c(left, right)` exactly once, without swapping its arguments. It maps a negative result to `1`, a positive result to `-1`, and zero to zero. It must not compute `-result`, because negating `math.MinInt` overflows.
+
+`c.Reverse().Reverse()` must have the same result sign as `c`; nonzero magnitude need not be restored. A nil receiver is accepted during construction and panics only when the returned comparator invokes it. Receiver panics propagate unchanged.
+
+#### `Then`
+
+```go
+func (c Func[T]) Then(others ...Func[T]) Func[T]
+```
+
+Returns lexicographic composition. Each evaluation invokes `c(left, right)` first. If it returns nonzero, that sign is returned and no `others` entry is invoked. Otherwise entries are invoked in argument order with the same left and right values until the first nonzero result; remaining entries are skipped. The result is zero only when every reached comparator returns zero.
+
+`Then` must make a shallow snapshot of the variadic comparator descriptor slice during construction. Replacing an entry in the caller's source slice later must not change the existing composition. Function values and state captured by them remain shallow aliases, so later captured-state mutation remains visible. A non-empty snapshot may allocate at construction; evaluation must not allocate because of the composition itself.
+
+#### `ThenBy`
+
+```go
+func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
+```
+
+Appends one ascending ordered-key level. Each evaluation invokes `c(left, right)` first and returns its nonzero result unchanged. Only after a zero result does it invoke `key(left)` exactly once, invoke `key(right)` exactly once, and return `cmp.Compare(leftKey, rightKey)`. A receiver panic or nonzero result skips both projections. Projection panic and nil behavior otherwise match `By`.
+
+#### `ThenByDescending`
+
+```go
+func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
+```
+
+Has the same receiver-first short-circuit, projection order, count, panic, nil, and caching contract as `ThenBy`. After reaching and computing left and right keys, it returns `cmp.Compare(rightKey, leftKey)`. It reverses only the newly appended level and never changes the preceding ordering represented by `c`.
+
+#### `ThenOn`
+
+```go
+func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
+```
+
+Appends one custom projected ordering level. Each evaluation invokes `c(left, right)` first and returns its nonzero result unchanged. Only after a zero result does it invoke `project(left)` exactly once, invoke `project(right)` exactly once, and invoke `compare(leftProjected, rightProjected)` exactly once. It returns the custom comparator result unchanged. Receiver or projection panic prevents every later call; a nil or panicking custom comparator is reached only after both projections return.
+
+#### `ThenOnDescending`
+
+```go
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+```
+
+Has the same receiver-first short-circuit, projection order, comparator argument order, counts, panic, nil, and caching contract as `ThenOn`. When the custom level is reached, it maps the comparator result sign exactly as `OnDescending` does, including safe handling of `math.MinInt`. It reverses only the newly appended level and never changes the preceding ordering represented by `c`.
+
+Every fluent projected-level method is construction-lazy and permits an independently inferred key type. Chaining ordered and custom levels of different types must compile without explicitly repeating receiver type `T`. These single-level methods capture their receiver and callbacks directly; they have no variadic descriptor slice to snapshot.
+
+### 6.5 Complexity, interoperability, and consumer boundaries
+
+| API | Construction | Evaluation time | Evaluation allocation | Short-circuit |
+| --- | --- | --- | --- | --- |
+| `Ordered` | `O(1)` | one `cmp.Compare` | zero | n/a |
+| `By` | `O(1)` | two projections plus `cmp.Compare` | zero apart from callback behavior | left panic skips right |
+| `ByDescending` | `O(1)` | two projections plus `cmp.Compare` | zero apart from callback behavior | left panic skips right |
+| `On` | `O(1)` | two projections plus one comparator | zero apart from callbacks | projection panic skips later calls |
+| `OnDescending` | `O(1)` | two projections, one comparator, sign reversal | zero apart from callbacks | projection panic skips later calls |
+| `Reverse` | `O(1)` | one receiver call | zero | n/a |
+| `Then` | `O(len(others))` snapshot | through first nonzero | zero | first nonzero |
+| `ThenBy` | `O(1)` | receiver, then two projections plus `cmp.Compare` | zero apart from callbacks | nonzero receiver |
+| `ThenByDescending` | `O(1)` | receiver, then two projections plus `cmp.Compare` | zero apart from callbacks | nonzero receiver |
+| `ThenOn` | `O(1)` | receiver, then two projections plus one comparator | zero apart from callbacks | nonzero receiver |
+| `ThenOnDescending` | `O(1)` | receiver, projected comparator, sign reversal | zero apart from callbacks | nonzero receiver |
+
+The underlying type of `Func[T]` is identical to the unnamed `func(T, T) int` accepted by:
+
+```text
+slices.SortFunc
+slices.SortStableFunc
+slices.MinFunc
+slices.MaxFunc
+stream.Stream[T].SortedFunc
+stream.Stream[T].MinFunc
+stream.Stream[T].MaxFunc
+```
+
+A comparator value must pass directly to those APIs without conversion. Ordinary unnamed function values, instantiated generic functions such as `cmp.Compare`, and compatible method expressions such as `time.Time.Compare` must be accepted where a `Func` parameter supplies enough inference context. Generic fluent methods must support ordinary inference, explicit method instantiation, target-type inference for method values and method expressions, and chains whose projected levels use different key types.
+
+Comparator specifies ordering only within one invocation. A consumer controls operand selection, total comparison count, stability, tie retention, collection mutation, and state after panic. `slices.SortStableFunc` and `Stream.SortedFunc` preserve source order inside equivalent groups; `slices.SortFunc` does not promise stability. Stable descending output reverses key-group direction but preserves tie order and therefore need not equal the complete reversal of stable ascending output.
+
+## 7. Required examples
 
 The implementation must provide executable Go examples for at least the following scenarios. Names may follow normal Go example naming, but behavior must match.
 
-### 6.1 Optional chain
+### 7.1 Optional chain
 
 ```go
 name := optional.Some("  Brooklyn  ").
@@ -1351,7 +1550,7 @@ fmt.Println(name)
 // Output: BROOKLYN
 ```
 
-### 6.2 Present nil and JSON
+### 7.2 Present nil and JSON
 
 ```go
 presentNil := optional.Some[*int](nil)
@@ -1364,7 +1563,7 @@ fmt.Println(presentNil.IsSome(), string(data), decoded.IsNone())
 // Output: true null true
 ```
 
-### 6.3 Infinite pipeline
+### 7.3 Infinite pipeline
 
 ```go
 values := stream.Iterate(1, func(v int) int { return v + 1 }).
@@ -1377,7 +1576,7 @@ fmt.Println(values)
 // Output: [4 16 36 64 100]
 ```
 
-### 6.4 Pair and Seq2 interoperability
+### 7.4 Pair and Seq2 interoperability
 
 ```go
 seq2 := func(yield func(string, int) bool) {
@@ -1397,15 +1596,19 @@ fmt.Println(pairs)
 // Output: [a=1 b=2]
 ```
 
-### 6.5 Stable chunks, windows, and groups
+### 7.5 Stable chunks, windows, and groups
 
 Examples must demonstrate the final partial chunk, omission of partial windows, mutation safety after later output, and first-key GroupBy order.
 
-### 6.6 Predicate composition and shared filters
+### 7.6 Predicate composition and shared filters
 
 Examples must demonstrate `Not`, `And`, and `Or`, projection with `On`, typed-nil handling, and one `Func[T]` passed directly to both Optional and Stream Filter.
 
-## 7. Performance acceptance criteria
+### 7.7 Comparator mixed ordering and interoperability
+
+Examples must demonstrate ascending and descending ordered keys through fluent `ThenBy` methods, a non-ordered key projected through `On` and fluent `ThenOn`, custom descending projection, the distinction between per-level descending and whole-order `Reverse`, and one `Func[T]` passed directly to both `slices.SortStableFunc` and Stream comparison operations.
+
+## 8. Performance acceptance criteria
 
 The implementation must include benchmarks against equivalent direct loops for sizes 10, 1K, and 1M where the scenario is meaningful:
 
@@ -1421,6 +1624,27 @@ Collect
 ```
 
 Every benchmark must report allocations and consume its result. Benchmarks must state whether source and destination storage are preallocated. A comparison is invalid if the direct loop and Shuttle version perform different copying, stable sorting, or ownership work.
+
+Package comparator must include direct/composed, allocation-reporting evaluation benchmarks for:
+
+```text
+Ordered
+By
+ByDescending
+On
+OnDescending
+Reverse
+Then
+ThenBy
+ThenByDescending
+ThenOn
+ThenOnDescending
+three-level mixed ordering
+slices.SortStableFunc interoperability
+Stream.SortedFunc interoperability
+```
+
+Comparator construction must be benchmarked separately from repeated evaluation. Sorting comparisons must copy the same unsorted input for every iteration on both sides and must not use unequal key-precomputation strategies.
 
 Package predicate must include allocation-reporting benchmarks against equivalent direct Boolean expressions for:
 
@@ -1439,16 +1663,18 @@ They must report `ns/op`, `B/op`, and `allocs/op`. Timing is review data rather 
 Allocation tests must guard that, after bounded pipeline/traversal setup, allocation does not grow linearly with element count for:
 
 ```text
+Comparator: Ordered, By, ByDescending, On, OnDescending, Reverse, Then,
+            ThenBy, ThenByDescending, ThenOn, ThenOnDescending
 Predicate: Not, And, Or, Always, Equal, EqualFunc, On
 Optional: Map, FlatMap, Filter, Inspect
 Stream:   Map, Filter, Inspect, Take, Skip, TakeWhile, SkipWhile
 ```
 
-Predicate allocation gates must preconstruct descriptors and require zero allocations per evaluation when callbacks do not allocate. `IsNil` and `IsNotNil` must also have representative allocation coverage for static nilable inputs, while documentation and benchmarks retain their interface-boxing and reflection cost boundary. Zero total allocations are a target where escape analysis permits for Optional and Stream, but their normative requirement is zero **per-element** allocation caused by the listed operators. `Ptr`, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
+Comparator and Predicate allocation gates must preconstruct descriptors and require zero allocations per evaluation when callbacks do not allocate. Comparator construction closures and a non-empty `Then` snapshot may allocate before evaluation. `IsNil` and `IsNotNil` must also have representative allocation coverage for static nilable inputs, while documentation and benchmarks retain their interface-boxing and reflection cost boundary. Zero total allocations are a target where escape analysis permits for Optional and Stream, but their normative requirement is zero **per-element** allocation caused by the listed operators. `Ptr`, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
 
-## 8. Test acceptance criteria
+## 9. Test acceptance criteria
 
-### 8.1 Unit and property tests
+### 9.1 Unit and property tests
 
 The test suite must cover every public identifier and all documented empty, zero, nil, negative, duplicate, tie, overflow, and panic branches. It must include reusable and instrumented single-use sources and exact consumption counters.
 
@@ -1463,6 +1689,32 @@ Ptr copy isolation
 JSON null, malformed JSON, custom T marshalers, omitempty, omitzero
 nil UnmarshalJSON receiver
 unchanged receiver after JSON error
+```
+
+Required Comparator cases include:
+
+```text
+zero and nil Func; construction laziness
+Ordered negative, zero, positive, named types, floating-point, NaN, and signed zero
+By and ByDescending direction, exact left-right projection order, and counts
+On and OnDescending projection/comparator order, arguments, exact counts, sign semantics, and every panic path
+Reverse negative, zero, positive, math.MinInt, exact receiver count, and unchanged panic
+double Reverse sign equivalence
+Then left-to-right order, first-nonzero short-circuit, repeated evaluation, and all-zero result
+ThenBy and ThenByDescending receiver-first short-circuit, direction, projection order, and counts
+ThenOn and ThenOnDescending receiver-first short-circuit, comparator argument order, direction, and counts
+custom descending math.MinInt safety without swapping comparator arguments
+reached and skipped nil comparators
+reached and skipped nil fluent projections and custom comparators
+variadic descriptor snapshot and captured-state aliasing
+generic inference, explicit instantiation, argument-context and target-type inference
+generic fluent method values, method expressions, mixed key types, and named/unnamed function assignability
+time.Time projection through On and time.Time.Compare
+direct slices SortFunc, SortStableFunc, MinFunc, and MaxFunc interoperability
+direct Stream SortedFunc, MinFunc, and MaxFunc interoperability
+stable tie behavior and the distinction between whole Reverse and one descending level
+safe concurrent immutable evaluation and caller-owned mutable state
+zero per-comparison allocation for every core operation
 ```
 
 Required Predicate cases include:
@@ -1506,13 +1758,15 @@ dynamic non-comparable interface keys
 integer boundary behavior for RangeStep, Enumerate, and Count where practical
 ```
 
-Property tests and bounded fuzz targets must compare to straightforward reference expressions or loops. Predicate fuzzing must cover double negation, both De Morgan laws, arbitrary Boolean `And` and `Or` truth tables, `IsNotNil(value) == !IsNil(value)`, and composed results against a direct reference expression. Stream fuzzing must never accidentally run an unbounded pipeline, and every fuzz target must bound retained input and work.
+Property tests and bounded fuzz targets must compare to straightforward reference expressions or loops. Comparator fuzzing must cover sign reversal, double-reversal sign equivalence, custom projected descending sign reversal, both `Then` and fluent mixed-key composition against direct lexicographic comparison, `By` and `ByDescending` against `cmp.Compare`, reversed ascending/descending key sequences while preserving stable ties, and strict-weak-order sign symmetry plus negative-relation and zero-equivalence transitivity for generated lawful combinations. It must not assert complete slice reversal when ties exist. Predicate fuzzing must cover double negation, both De Morgan laws, arbitrary Boolean `And` and `Or` truth tables, `IsNotNil(value) == !IsNil(value)`, and composed results against a direct reference expression. Stream fuzzing must never accidentally run an unbounded pipeline, and every fuzz target must bound retained input and work.
 
-### 8.2 Race and leak tests
+### 9.2 Race and leak tests
 
 `go test -race ./...` must pass. Concurrency tests must distinguish:
 
+- safe concurrent evaluation of immutable comparator compositions;
 - safe concurrent evaluation of immutable predicate compositions;
+- mutable state captured by comparators, which remains the caller's synchronization responsibility;
 - mutable state captured by predicates, which remains the caller's synchronization responsibility;
 - safe concurrent traversal of built-in immutable sources;
 - intentionally unsafe external shared state, which is documented rather than normalized; and
@@ -1520,7 +1774,7 @@ Property tests and bounded fuzz targets must compare to straightforward referenc
 
 Iterator cleanup tests must use explicit completion signals or source defers. Timing-only goroutine-count assertions are insufficient. Zip tests must exercise normal completion, both shorter sides, downstream false, left panic, right panic, and panic in downstream processing, and must observe cleanup of both sources.
 
-## 9. Release Definition of Done
+## 10. Release Definition of Done
 
 Before `v1.0.0`, and before every later v1 release, all of the following must be true:
 
@@ -1532,18 +1786,18 @@ Before `v1.0.0`, and before every later v1 release, all of the following must be
 6. A pinned Go-1.27-capable `staticcheck` passes. RC tool lag must be explicitly recorded and cannot remain at v1 freeze.
 7. `govulncheck ./...` passes for the release candidate.
 8. Linux amd64/arm64, macOS amd64/arm64, and Windows amd64/arm64 compile; native tests run wherever reliable runners exist, with native versus cross-compiled coverage recorded.
-9. Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed on a pinned runner.
+9. Comparator and Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed on a pinned runner.
 10. An API diff against the previous release has been classified under Semantic Versioning.
 11. The final Go 1.27 specification and release notes have been checked for generic-method or iterator changes.
 12. `DESIGN.md`, this document, GoDoc, tests, and implementation agree on every public behavior.
-13. `docs/_local/README_zh.md`, `docs/_local/DESIGN_zh.md`, and `docs/_local/API_SPEC_zh.md` match the English documents in structure, signatures, tables, and meaning; the local directory remains ignored by Git.
 
-## 10. Compatibility rules for implementers
+## 11. Compatibility rules for implementers
 
 Within v1, an implementation must not change:
 
 - any declaration in the public inventories;
 - zero-value behavior;
+- comparator result-sign semantics, projection and custom-comparator argument order and counts, whole-order and per-level reversal, fluent receiver-first short-circuiting, variadic snapshots, and lack of key caching;
 - predicate evaluation order, short-circuiting, variadic snapshots, and the strict typed-nil reflection boundary;
 - None versus present-zero or present-nil semantics;
 - JSON representations or omission behavior;
@@ -1561,7 +1815,7 @@ The implementation may change internal representation, growth factors, hash-tabl
 
 Adding a method or exported field is an API change and requires review even if existing source appears to compile. Removing or changing API requires a new major version after v1, except for an unavoidable security or correctness emergency handled under the project's published policy.
 
-## 11. Explicitly omitted APIs
+## 12. Explicitly omitted APIs
 
 The following names or concepts must not appear as v1 public API:
 
@@ -1575,8 +1829,11 @@ MapToInt, MapToString
 Peek, Limit, Select, Where, ToSlice, Fold
 ContainsFunc (use Any)
 Sum
+Asc, Desc, OnAscending, ThenOnAscending, ByFunc, ThenByFunc
+Compare, Comparing, ThenComparing, Chain, Natural, Default
+comparator builders or direction enums
 AllOf, AnyOf, Negate, Matches, Test, Apply, Compose, Contramap, Equals
-reflection-based conversion or equality outside predicate typed-nil detection
+reflection-based comparison, conversion, or equality outside predicate typed-nil detection
 pre-Go-1.27 fallback functions for generic methods
 ```
 
