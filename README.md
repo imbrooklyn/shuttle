@@ -61,12 +61,23 @@ BROOKLYN
 [4 16 36 64 100]
 ```
 
-Presence is separate from the stored value:
+`Some` never interprets a zero or nil payload as absence. An `Optional[*T]`
+therefore has three possible states: absent, present with a nil pointer, and
+present with a non-nil pointer. Use `Optional[*T]` only when that distinction is
+meaningful:
 
 ```go
 presentNil := optional.Some[*int](nil)
+pointer := presentNil.Ptr()
+
 fmt.Println(presentNil.IsSome()) // true
+fmt.Println(pointer == nil)      // false
+fmt.Println(*pointer == nil)     // true
 ```
+
+Here `Ptr` returns a `**int` pointing to a shallow copy of the stored nil
+pointer; it does not dereference the payload. Dereferencing `**pointer` would
+still panic in the usual Go manner.
 
 JSON encodes both `None[*T]()` and `Some[*T](nil)` as `null`; decoding `null`
 produces `None`. This intentionally loses the presence bit for a present nil.
