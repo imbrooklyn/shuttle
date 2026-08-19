@@ -94,6 +94,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
       - run: go test ./optional -run=^$ -fuzz=^FuzzOptionalJSON$ -fuzztime=10s
+      - run: go test ./predicate -run=^$ -fuzz=^FuzzDoubleNegation$ -fuzztime=10s
+      - run: go test ./predicate -run=^$ -fuzz=^FuzzBooleanLaws$ -fuzztime=10s
+      - run: go test ./predicate -run=^$ -fuzz=^FuzzIsNotNilNegation$ -fuzztime=10s
+      - run: go test ./predicate -run=^$ -fuzz=^FuzzCompositionMatchesReference$ -fuzztime=10s
       - run: go test ./stream -run=^$ -fuzz=^FuzzStreamFiniteProperties$ -fuzztime=10s
 
   analysis:

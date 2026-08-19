@@ -36,7 +36,7 @@ All copies are shallow Go assignments unless this specification explicitly requi
 
 ### 2.1 Callback execution
 
-Callbacks and comparators execute synchronously and sequentially within one traversal. Shuttle must not invoke a user callback concurrently with itself and must not start worker goroutines. Callback side effects occur in the order documented for the operation.
+Callbacks and comparators execute synchronously and sequentially within one predicate evaluation, Optional operation, or Stream traversal. Shuttle must not invoke a user callback concurrently with itself and must not start worker goroutines. Callback side effects occur in the order documented for the operation.
 
 A Stream source must call `yield` serially and wait for each call to return. Concurrent calls to one traversal's `yield` are unsupported and may race or panic. Shuttle does not guarantee callback goroutine identity for an externally supplied source; it guarantees only that Shuttle introduces no callback concurrency or worker goroutine.
 
@@ -65,7 +65,7 @@ Go permits an interface type to satisfy `comparable` even though a particular dy
 
 ### 2.4 Immutability and thread safety
 
-Public value methods do not mutate an `Optional` or `Stream`. That fact alone does not make referenced values, sources, callbacks, or destinations safe for concurrent access. Concurrent Stream traversals are supported only to the extent that the source and every captured value and callback are safe for concurrent use. Shuttle adds no cross-traversal lock.
+Public value methods do not mutate an `Optional` or `Stream`, and predicate composition does not mutate an existing `Func`. That fact alone does not make referenced values, sources, callbacks, or destinations safe for concurrent access. Concurrent predicate evaluation or Stream traversal is supported only to the extent that every reached callback, captured value, source, and destination is safe for concurrent use. Shuttle adds no cross-evaluation or cross-traversal lock.
 
 Nil pointers to these value types are not a third logical state. Except for the explicit nil-receiver rule of `(*Optional[T]).UnmarshalJSON`, invoking a value-receiver method through a nil `*Optional[T]` or `*Stream[T]` has ordinary Go nil-pointer dereference behavior.
 
@@ -1164,11 +1164,181 @@ An implementation must include instrumented tests proving all of the following:
 
 If an operator uses `iter.Pull` beyond the required Zip implementation, it must satisfy the same stop and synchronization rules and must be justified in code review.
 
-## 5. Required examples
+## 5. Package `predicate`
+
+Import path:
+
+```go
+import "github.com/imbrooklyn/shuttle/predicate"
+```
+
+The package is independent and must not import `optional` or `stream`. It may use `reflect` only within the typed-nil behavior specified in Section 5.5. It must have no third-party runtime dependency.
+
+### 5.1 Complete public declaration inventory
+
+The package must export exactly the following v1 API:
+
+```go
+package predicate
+
+type Func[T any] func(T) bool
+
+func (p Func[T]) Not() Func[T]
+func (p Func[T]) And(others ...Func[T]) Func[T]
+func (p Func[T]) Or(others ...Func[T]) Func[T]
+
+func Always[T any](result bool) Func[T]
+func Equal[T comparable](want T) Func[T]
+func EqualFunc[T any](want T, equal func(T, T) bool) Func[T]
+func On[A, B any](project func(A) B, predicate Func[B]) Func[A]
+
+func IsNil[T any](value T) bool
+func IsNotNil[T any](value T) bool
+```
+
+There are no exported interfaces, struct wrappers, sentinel values, state types, aliases, or helper names such as `AllOf`, `AnyOf`, `Negate`, `Matches`, `Test`, `Apply`, `Compose`, `Contramap`, or `Equals` in v1.
+
+### 5.2 `Func` type and common composition contract
+
+```go
+type Func[T any] func(T) bool
+```
+
+`Func[T]` is a defined function type whose underlying type is exactly `func(T) bool`. A value is therefore directly assignable to an unnamed `func(T) bool` parameter, including `optional.Optional[T].Filter` and `stream.Stream[T].Filter`. Ordinary unnamed function values with the matching signature are assignable where `Func[T]` is required.
+
+The zero value of `Func[T]` is a nil function. It has no implicit true, false, identity, or disabled meaning. Calling it has ordinary Go nil-function behavior and panics. Merely constructing a composition around it must not invoke it or panic.
+
+All `Func` methods are construction-lazy. Every evaluation must be:
+
+- synchronous, sequential, and left to right;
+- governed by the exact short-circuit rules of the selected operation;
+- free of panic recovery, goroutine creation, result caching, and global locking; and
+- free of allocation caused by composition after construction, when reached callbacks themselves do not allocate.
+
+Every evaluation is independent and must invoke every reached predicate anew. Function values and captured state retain normal Go shallow aliasing and concurrency semantics. A composition is safe for concurrent evaluation only when every reached predicate and captured value is safe for concurrent use. Shuttle must not add synchronization around caller-owned state.
+
+For every variadic composition, the supplied predicate descriptor slice must be shallow-snapshotted at construction. Replacing an entry in the caller's slice afterward must not change the composition. Captured objects reachable through the copied function values remain shared.
+
+### 5.3 Composition methods
+
+#### `Not`
+
+```go
+func (p Func[T]) Not() Func[T]
+```
+
+Returns a predicate that invokes `p` exactly once for each evaluation and returns the logical negation of its result. A panic from `p`, including ordinary invocation of a nil `p`, propagates unchanged.
+
+#### `And`
+
+```go
+func (p Func[T]) And(others ...Func[T]) Func[T]
+```
+
+For each evaluation, invokes `p` first and then each entry of the construction-time snapshot of `others` in argument order. It returns false immediately after the first false result and returns true only when every reached predicate returns true. With no `others`, it invokes `p` exactly once and returns its result.
+
+A nil predicate skipped after a false result must not panic. A nil receiver or entry that is reached must panic through ordinary nil-function invocation. No later predicate may be invoked after a false result or panic.
+
+#### `Or`
+
+```go
+func (p Func[T]) Or(others ...Func[T]) Func[T]
+```
+
+For each evaluation, invokes `p` first and then each entry of the construction-time snapshot of `others` in argument order. It returns true immediately after the first true result and returns false only when every reached predicate returns false. With no `others`, it invokes `p` exactly once and returns its result.
+
+A nil predicate skipped after a true result must not panic. A nil receiver or entry that is reached must panic through ordinary nil-function invocation. No later predicate may be invoked after a true result or panic.
+
+### 5.4 Constructors and adapters
+
+#### `Always`
+
+```go
+func Always[T any](result bool) Func[T]
+```
+
+Returns a predicate that ignores its input and always returns `result`. Construction and evaluation do not invoke user code.
+
+#### `Equal`
+
+```go
+func Equal[T comparable](want T) Func[T]
+```
+
+Returns a predicate that evaluates `current == want` using normal Go equality. It supports the zero value of every comparable type and performs no reflective or deep equality. When `T` is an interface type and a compared dynamic value is non-comparable, evaluation has ordinary Go behavior and may panic.
+
+#### `EqualFunc`
+
+```go
+func EqualFunc[T any](want T, equal func(T, T) bool) Func[T]
+```
+
+For every evaluation, invokes `equal` exactly once as `equal(current, want)` and returns its result. Current value first and wanted value second is normative argument order. A nil `equal` callback is accepted during construction and panics by ordinary nil-function invocation only when the returned predicate is evaluated.
+
+#### `On`
+
+```go
+func On[A, B any](project func(A) B, predicate Func[B]) Func[A]
+```
+
+For every evaluation, invokes `project` exactly once with the current `A`. Only after projection returns, it invokes `predicate` exactly once with the resulting `B` and returns that result. Projection must not be recomputed. A project panic prevents predicate invocation; a predicate panic occurs after exactly one successful projection. Either panic propagates unchanged. Nil callbacks follow the same reached-call rule.
+
+### 5.5 Nil predicates and reflection boundary
+
+#### `IsNil`
+
+```go
+func IsNil[T any](value T) bool
+```
+
+Returns true exactly when `value` is:
+
+- a nil interface value; or
+- a nil channel, function, map, pointer, unsafe pointer, or slice, including a named nilable type or a typed nil stored in an interface.
+
+It returns false for every non-nil value and non-nilable type and must not panic for those inputs.
+
+To preserve typed-nil semantics for `T any`, the implementation may box `value` into an interface and use reflection to inspect its dynamic kind. Reflection is restricted to `IsNil` and must be limited to `reflect.ValueOf`, kind classification, and nil testing. This exception must not be extended to equality, projection, composition, Optional, or Stream. Interface boxing and reflection dispatch are explicit performance costs and may affect escape analysis, but the implementation must not intentionally allocate or cache values.
+
+#### `IsNotNil`
+
+```go
+func IsNotNil[T any](value T) bool
+```
+
+Returns exactly `!IsNil(value)` for every value. It must not maintain a separate kind table or semantics that can drift from `IsNil`.
+
+Both functions are generic functions, not constructor results. Type inference and argument-context reverse inference must allow matching uses such as:
+
+```go
+var keepPointers func(*int) bool = predicate.IsNotNil
+
+present := optional.Some(pointer).Filter(predicate.IsNotNil)
+pointers := stream.FromSlice(values).Filter(predicate.IsNil)
+```
+
+Explicit instantiation, such as `predicate.IsNil[*int]`, must also compile.
+
+### 5.6 Complexity and interoperability matrix
+
+| API | Construction | Evaluation time | Evaluation allocation | Short-circuit |
+| --- | --- | --- | --- | --- |
+| `Not` | `O(1)` | one receiver call | zero | n/a |
+| `And` | `O(len(others))` snapshot | through first false | zero | first false |
+| `Or` | `O(len(others))` snapshot | through first true | zero | first true |
+| `Always` | `O(1)` | `O(1)` | zero | n/a |
+| `Equal` | `O(1)` | one `==` | zero | n/a |
+| `EqualFunc` | `O(1)` | one callback | zero apart from callback | n/a |
+| `On` | `O(1)` | one projection plus one predicate | zero apart from callbacks | project panic prevents predicate |
+| `IsNil` / `IsNotNil` | n/a | `O(1)` reflection dispatch | no intentional allocation | n/a |
+
+The allocation statements assume values and callbacks do not escape because of caller code. Compiler escape behavior is validated with the target Go toolchain rather than guaranteed across all future compilers.
+
+## 6. Required examples
 
 The implementation must provide executable Go examples for at least the following scenarios. Names may follow normal Go example naming, but behavior must match.
 
-### 5.1 Optional chain
+### 6.1 Optional chain
 
 ```go
 name := optional.Some("  Brooklyn  ").
@@ -1181,7 +1351,7 @@ fmt.Println(name)
 // Output: BROOKLYN
 ```
 
-### 5.2 Present nil and JSON
+### 6.2 Present nil and JSON
 
 ```go
 presentNil := optional.Some[*int](nil)
@@ -1194,7 +1364,7 @@ fmt.Println(presentNil.IsSome(), string(data), decoded.IsNone())
 // Output: true null true
 ```
 
-### 5.3 Infinite pipeline
+### 6.3 Infinite pipeline
 
 ```go
 values := stream.Iterate(1, func(v int) int { return v + 1 }).
@@ -1207,7 +1377,7 @@ fmt.Println(values)
 // Output: [4 16 36 64 100]
 ```
 
-### 5.4 Pair and Seq2 interoperability
+### 6.4 Pair and Seq2 interoperability
 
 ```go
 seq2 := func(yield func(string, int) bool) {
@@ -1227,11 +1397,15 @@ fmt.Println(pairs)
 // Output: [a=1 b=2]
 ```
 
-### 5.5 Stable chunks, windows, and groups
+### 6.5 Stable chunks, windows, and groups
 
 Examples must demonstrate the final partial chunk, omission of partial windows, mutation safety after later output, and first-key GroupBy order.
 
-## 6. Performance acceptance criteria
+### 6.6 Predicate composition and shared filters
+
+Examples must demonstrate `Not`, `And`, and `Or`, projection with `On`, typed-nil handling, and one `Func[T]` passed directly to both Optional and Stream Filter.
+
+## 7. Performance acceptance criteria
 
 The implementation must include benchmarks against equivalent direct loops for sizes 10, 1K, and 1M where the scenario is meaningful:
 
@@ -1248,18 +1422,33 @@ Collect
 
 Every benchmark must report allocations and consume its result. Benchmarks must state whether source and destination storage are preallocated. A comparison is invalid if the direct loop and Shuttle version perform different copying, stable sorting, or ownership work.
 
+Package predicate must include allocation-reporting benchmarks against equivalent direct Boolean expressions for:
+
+```text
+Not
+And
+Or
+On
+IsNil
+Optional.Filter interoperability
+Stream.Filter interoperability
+```
+
+They must report `ns/op`, `B/op`, and `allocs/op`. Timing is review data rather than a cross-platform pass/fail threshold.
+
 Allocation tests must guard that, after bounded pipeline/traversal setup, allocation does not grow linearly with element count for:
 
 ```text
+Predicate: Not, And, Or, Always, Equal, EqualFunc, On
 Optional: Map, FlatMap, Filter, Inspect
 Stream:   Map, Filter, Inspect, Take, Skip, TakeWhile, SkipWhile
 ```
 
-Zero total allocations are a target where escape analysis permits, but the normative requirement is zero **per-element** allocation caused by those operators. `Ptr`, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
+Predicate allocation gates must preconstruct descriptors and require zero allocations per evaluation when callbacks do not allocate. `IsNil` and `IsNotNil` must also have representative allocation coverage for static nilable inputs, while documentation and benchmarks retain their interface-boxing and reflection cost boundary. Zero total allocations are a target where escape analysis permits for Optional and Stream, but their normative requirement is zero **per-element** allocation caused by the listed operators. `Ptr`, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
 
-## 7. Test acceptance criteria
+## 8. Test acceptance criteria
 
-### 7.1 Unit and property tests
+### 8.1 Unit and property tests
 
 The test suite must cover every public identifier and all documented empty, zero, nil, negative, duplicate, tie, overflow, and panic branches. It must include reusable and instrumented single-use sources and exact consumption counters.
 
@@ -1274,6 +1463,28 @@ Ptr copy isolation
 JSON null, malformed JSON, custom T marshalers, omitempty, omitzero
 nil UnmarshalJSON receiver
 unchanged receiver after JSON error
+```
+
+Required Predicate cases include:
+
+```text
+zero and nil Func; construction laziness
+Not, And, and Or truth tables
+exact callback order, counts, short-circuiting, and repeated evaluation
+reached and skipped nil predicates
+unchanged panic propagation
+variadic descriptor snapshots and captured-state aliasing
+Always; Equal zero values; dynamic non-comparable Equal[any] panic
+EqualFunc current/want order and exact count
+On project/predicate order, exact count, and panic paths
+nil interface and every nilable reflection kind
+named nilable types; typed nils in interfaces; non-nil and non-nilable values
+IsNotNil exact negation
+generic inference, explicit instantiation, reverse inference
+method values, method expressions, and named-function assignability
+direct Optional.Filter and Stream.Filter interoperability
+safe concurrent immutable evaluation and caller-owned mutable state
+zero per-evaluation allocation for core composition
 ```
 
 Required Stream cases include:
@@ -1295,19 +1506,21 @@ dynamic non-comparable interface keys
 integer boundary behavior for RangeStep, Enumerate, and Count where practical
 ```
 
-Property tests and bounded fuzz targets must compare to straightforward reference loops for finite slices. Fuzzing must never accidentally run an unbounded pipeline.
+Property tests and bounded fuzz targets must compare to straightforward reference expressions or loops. Predicate fuzzing must cover double negation, both De Morgan laws, arbitrary Boolean `And` and `Or` truth tables, `IsNotNil(value) == !IsNil(value)`, and composed results against a direct reference expression. Stream fuzzing must never accidentally run an unbounded pipeline, and every fuzz target must bound retained input and work.
 
-### 7.2 Race and leak tests
+### 8.2 Race and leak tests
 
 `go test -race ./...` must pass. Concurrency tests must distinguish:
 
+- safe concurrent evaluation of immutable predicate compositions;
+- mutable state captured by predicates, which remains the caller's synchronization responsibility;
 - safe concurrent traversal of built-in immutable sources;
 - intentionally unsafe external shared state, which is documented rather than normalized; and
 - absence of races in per-traversal state when the same derived Stream is traversed concurrently over a concurrency-safe source and callbacks.
 
 Iterator cleanup tests must use explicit completion signals or source defers. Timing-only goroutine-count assertions are insufficient. Zip tests must exercise normal completion, both shorter sides, downstream false, left panic, right panic, and panic in downstream processing, and must observe cleanup of both sources.
 
-## 8. Release Definition of Done
+## 9. Release Definition of Done
 
 Before `v1.0.0`, and before every later v1 release, all of the following must be true:
 
@@ -1319,18 +1532,19 @@ Before `v1.0.0`, and before every later v1 release, all of the following must be
 6. A pinned Go-1.27-capable `staticcheck` passes. RC tool lag must be explicitly recorded and cannot remain at v1 freeze.
 7. `govulncheck ./...` passes for the release candidate.
 8. Linux amd64/arm64, macOS amd64/arm64, and Windows amd64/arm64 compile; native tests run wherever reliable runners exist, with native versus cross-compiled coverage recorded.
-9. Allocation targets and the 10/1K/1M benchmark comparison have been reviewed on a pinned runner.
+9. Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed on a pinned runner.
 10. An API diff against the previous release has been classified under Semantic Versioning.
 11. The final Go 1.27 specification and release notes have been checked for generic-method or iterator changes.
 12. `DESIGN.md`, this document, GoDoc, tests, and implementation agree on every public behavior.
-13. `docs/_local/DESIGN_zh.md` and `docs/_local/API_SPEC_zh.md` match the English documents in structure, signatures, tables, and meaning; the local directory remains ignored by Git.
+13. `docs/_local/README_zh.md`, `docs/_local/DESIGN_zh.md`, and `docs/_local/API_SPEC_zh.md` match the English documents in structure, signatures, tables, and meaning; the local directory remains ignored by Git.
 
-## 9. Compatibility rules for implementers
+## 10. Compatibility rules for implementers
 
 Within v1, an implementation must not change:
 
 - any declaration in the public inventories;
 - zero-value behavior;
+- predicate evaluation order, short-circuiting, variadic snapshots, and the strict typed-nil reflection boundary;
 - None versus present-zero or present-nil semantics;
 - JSON representations or omission behavior;
 - empty collection nilness;
@@ -1347,7 +1561,7 @@ The implementation may change internal representation, growth factors, hash-tabl
 
 Adding a method or exported field is an API change and requires review even if existing source appears to compile. Removing or changing API requires a new major version after v1, except for an unavoidable security or correctness emergency handled under the project's published policy.
 
-## 10. Explicitly omitted APIs
+## 11. Explicitly omitted APIs
 
 The following names or concepts must not appear as v1 public API:
 
@@ -1361,7 +1575,8 @@ MapToInt, MapToString
 Peek, Limit, Select, Where, ToSlice, Fold
 ContainsFunc (use Any)
 Sum
-reflection-based conversion
+AllOf, AnyOf, Negate, Matches, Test, Apply, Compose, Contramap, Equals
+reflection-based conversion or equality outside predicate typed-nil detection
 pre-Go-1.27 fallback functions for generic methods
 ```
 
