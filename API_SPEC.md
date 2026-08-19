@@ -1358,15 +1358,15 @@ type Func[T any] func(left, right T) int
 func Ordered[T cmp.Ordered]() Func[T]
 func By[T any, K cmp.Ordered](key func(T) K) Func[T]
 func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
-func On[A, B any](project func(A) B, compare Func[B]) Func[A]
-func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A]
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A]
 
 func (c Func[T]) Reverse() Func[T]
 func (c Func[T]) Then(others ...Func[T]) Func[T]
 func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
 func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
-func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
-func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T]
 ```
 
 There are no exported builder types, direction enums, options, aliases, sentinels, or validation errors. In particular, the package must not export `Asc`, `Desc`, `OnAscending`, `ThenOnAscending`, `ByFunc`, `ThenByFunc`, `Compare`, `Comparing`, `ThenComparing`, `Chain`, `Compose`, `Natural`, or `Default`.
@@ -1426,7 +1426,7 @@ Has the same projection order, count, panic, and caching contract as `By`. After
 #### `On`
 
 ```go
-func On[A, B any](project func(A) B, compare Func[B]) Func[A]
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A]
 ```
 
 Returns a comparator for arbitrary projected values and custom orderings. Each reached evaluation must:
@@ -1435,12 +1435,12 @@ Returns a comparator for arbitrary projected values and custom orderings. Each r
 2. invoke `project(right)` exactly once, only after the left call returns; and
 3. invoke `compare(leftProjected, rightProjected)` exactly once.
 
-It returns the comparator result without interpreting its magnitude. A projection panic skips every later call; a comparator panic occurs only after both projections return. Nil callbacks follow the same reached-path rule. `On(project, time.Time.Compare)` is the canonical composition for a `time.Time` key because `time.Time` does not satisfy `cmp.Ordered`.
+The unnamed `compare` parameter accepts ordinary functions, `Func[B]` values, compatible method expressions, and other named function types with the same underlying type without conversion. The returned comparator preserves the custom comparator result's sign; its magnitude is unspecified. A projection panic skips every later call; a comparator panic occurs only after both projections return. Nil callbacks follow the same reached-path rule. `On(project, time.Time.Compare)` is the canonical composition for a `time.Time` key because `time.Time` does not satisfy `cmp.Ordered`.
 
 #### `OnDescending`
 
 ```go
-func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A]
 ```
 
 Has the same projection order, count, panic, nil, and caching contract as `On`. It invokes `compare(leftProjected, rightProjected)` exactly once and then maps a negative result to `1`, a positive result to `-1`, and zero to zero. It must not swap comparator arguments or compute `-result`; preserving left-right arguments keeps callback behavior predictable, and sign normalization handles `math.MinInt` without overflow. Descending direction is relative to the ordering represented by `compare`, regardless of how that comparator was constructed.
@@ -1463,7 +1463,7 @@ Returns a comparator that reverses the complete relation represented by `c`. Eac
 func (c Func[T]) Then(others ...Func[T]) Func[T]
 ```
 
-Returns lexicographic composition. Each evaluation invokes `c(left, right)` first. If it returns nonzero, that sign is returned and no `others` entry is invoked. Otherwise entries are invoked in argument order with the same left and right values until the first nonzero result; remaining entries are skipped. The result is zero only when every reached comparator returns zero.
+Returns lexicographic composition. Each evaluation invokes `c(left, right)` first. If it returns nonzero, a result with that sign is returned and no `others` entry is invoked. Otherwise entries are invoked in argument order with the same left and right values until the first nonzero result; remaining entries are skipped. The result is zero only when every reached comparator returns zero. The magnitude of a selected nonzero result is unspecified.
 
 `Then` must make a shallow snapshot of the variadic comparator descriptor slice during construction. Replacing an entry in the caller's source slice later must not change the existing composition. Function values and state captured by them remain shallow aliases, so later captured-state mutation remains visible. A non-empty snapshot may allocate at construction; evaluation must not allocate because of the composition itself.
 
@@ -1473,7 +1473,7 @@ Returns lexicographic composition. Each evaluation invokes `c(left, right)` firs
 func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
 ```
 
-Appends one ascending ordered-key level. Each evaluation invokes `c(left, right)` first and returns its nonzero result unchanged. Only after a zero result does it invoke `key(left)` exactly once, invoke `key(right)` exactly once, and return `cmp.Compare(leftKey, rightKey)`. A receiver panic or nonzero result skips both projections. Projection panic and nil behavior otherwise match `By`.
+Appends one ascending ordered-key level. Each evaluation invokes `c(left, right)` first and, for a nonzero receiver result, returns a result with the same sign; magnitude is unspecified on that path. Only after a zero result does it invoke `key(left)` exactly once, invoke `key(right)` exactly once, and return `cmp.Compare(leftKey, rightKey)`. A receiver panic or nonzero result skips both projections. Projection panic and nil behavior otherwise match `By`.
 
 #### `ThenByDescending`
 
@@ -1486,15 +1486,15 @@ Has the same receiver-first short-circuit, projection order, count, panic, nil, 
 #### `ThenOn`
 
 ```go
-func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T]
 ```
 
-Appends one custom projected ordering level. Each evaluation invokes `c(left, right)` first and returns its nonzero result unchanged. Only after a zero result does it invoke `project(left)` exactly once, invoke `project(right)` exactly once, and invoke `compare(leftProjected, rightProjected)` exactly once. It returns the custom comparator result unchanged. Receiver or projection panic prevents every later call; a nil or panicking custom comparator is reached only after both projections return.
+Appends one custom projected ordering level. Each evaluation invokes `c(left, right)` first and, for a nonzero receiver result, returns a result with the same sign without invoking later callbacks. Only after a zero result does it invoke `project(left)` exactly once, invoke `project(right)` exactly once, and invoke `compare(leftProjected, rightProjected)` exactly once. It then returns a result with the custom comparator result's sign. Magnitude is unspecified on either nonzero path. The unnamed `compare` parameter has the same assignability contract as `On`. Receiver or projection panic prevents every later call; a nil or panicking custom comparator is reached only after both projections return.
 
 #### `ThenOnDescending`
 
 ```go
-func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T]
 ```
 
 Has the same receiver-first short-circuit, projection order, comparator argument order, counts, panic, nil, and caching contract as `ThenOn`. When the custom level is reached, it maps the comparator result sign exactly as `OnDescending` does, including safe handling of `math.MinInt`. It reverses only the newly appended level and never changes the preceding ordering represented by `c`.
@@ -1529,7 +1529,7 @@ stream.Stream[T].MinFunc
 stream.Stream[T].MaxFunc
 ```
 
-A comparator value must pass directly to those APIs without conversion. Ordinary unnamed function values, instantiated generic functions such as `cmp.Compare`, and compatible method expressions such as `time.Time.Compare` must be accepted where a `Func` parameter supplies enough inference context. Generic fluent methods must support ordinary inference, explicit method instantiation, target-type inference for method values and method expressions, and chains whose projected levels use different key types.
+A comparator value must pass directly to those APIs without conversion. The unnamed custom-comparator parameters of `On`, `OnDescending`, `ThenOn`, and `ThenOnDescending` must likewise accept ordinary function values, `Func` values, compatible named function types declared by other packages, instantiated generic functions such as `cmp.Compare`, and method expressions such as `time.Time.Compare` without explicit conversion. Generic fluent methods must support ordinary inference, explicit method instantiation, target-type inference for method values and method expressions, and chains whose projected levels use different key types.
 
 Comparator specifies ordering only within one invocation. A consumer controls operand selection, total comparison count, stability, tie retention, collection mutation, and state after panic. `slices.SortStableFunc` and `Stream.SortedFunc` preserve source order inside equivalent groups; `slices.SortFunc` does not promise stability. Stable descending output reverses key-group direction but preserves tie order and therefore need not equal the complete reversal of stable ascending output.
 
@@ -1708,7 +1708,7 @@ reached and skipped nil comparators
 reached and skipped nil fluent projections and custom comparators
 variadic descriptor snapshot and captured-state aliasing
 generic inference, explicit instantiation, argument-context and target-type inference
-generic fluent method values, method expressions, mixed key types, and named/unnamed function assignability
+generic fluent method values, method expressions, mixed key types, and custom comparator assignability from unnamed and distinct named function types
 time.Time projection through On and time.Time.Compare
 direct slices SortFunc, SortStableFunc, MinFunc, and MaxFunc interoperability
 direct Stream SortedFunc, MinFunc, and MaxFunc interoperability

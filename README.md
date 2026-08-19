@@ -101,15 +101,15 @@ type Func[T any] func(left, right T) int
 func Ordered[T cmp.Ordered]() Func[T]
 func By[T any, K cmp.Ordered](key func(T) K) Func[T]
 func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
-func On[A, B any](project func(A) B, compare Func[B]) Func[A]
-func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A]
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A]
 
 func (c Func[T]) Reverse() Func[T]
 func (c Func[T]) Then(others ...Func[T]) Func[T]
 func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
 func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
-func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
-func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T]
 ```
 
 Only a comparator result's sign is meaningful. `Then` evaluates ordering levels
@@ -120,7 +120,10 @@ is safe even when a comparator returns `math.MinInt`. `ThenBy`,
 and evaluate it only when every preceding level is equivalent. Ordered and
 custom projections run for left and then right exactly once per reached
 comparison; custom comparators receive those projected values in left-right
-order even for descending levels. Keys are not cached between comparisons.
+order even for descending levels. Custom-comparator parameters are unnamed, so
+ordinary functions, `Func` values, method expressions, and other compatible
+named function types pass without conversion. Keys are not cached between
+comparisons.
 
 The complete predicate API is deliberately small:
 

@@ -55,12 +55,13 @@ func FuzzThenMatchesReference(f *testing.F) {
 	f.Fuzz(func(t *testing.T, ap, as, at, bp, bs, bt int) {
 		left := fuzzRecord{primary: ap, secondary: as, tertiary: at}
 		right := fuzzRecord{primary: bp, secondary: bs, tertiary: bt}
-		combined := comparator.By(func(value fuzzRecord) int { return value.primary }).
-			ThenByDescending(func(value fuzzRecord) int { return value.secondary }).
-			ThenOn(
+		combined := comparator.By(func(value fuzzRecord) int { return value.primary }).Then(
+			comparator.ByDescending(func(value fuzzRecord) int { return value.secondary }),
+			comparator.On(
 				func(value fuzzRecord) int { return value.tertiary },
 				comparator.Ordered[int](),
-			)
+			),
+		)
 
 		want := cmp.Compare(left.primary, right.primary)
 		if want == 0 {

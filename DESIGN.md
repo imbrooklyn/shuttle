@@ -697,20 +697,20 @@ type Func[T any] func(left, right T) int
 func Ordered[T cmp.Ordered]() Func[T]
 func By[T any, K cmp.Ordered](key func(T) K) Func[T]
 func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
-func On[A, B any](project func(A) B, compare Func[B]) Func[A]
-func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A]
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A]
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A]
 
 func (c Func[T]) Reverse() Func[T]
 func (c Func[T]) Then(others ...Func[T]) Func[T]
 func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
 func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
-func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T]
-func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T]
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T]
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T]
 ```
 
 The projected-level API is a deliberate matrix: ordered keys use `By` and `ThenBy`, custom orderings use `On` and `ThenOn`, and each has one `Descending` counterpart that reverses only that level. The unsuffixed form is canonical for the supplied or natural direction. `Asc`, `Desc`, `OnAscending`, `ThenOnAscending`, `ByFunc`, `ThenByFunc`, `Compare`, `Comparing`, `ThenComparing`, `Chain`, `Compose`, `Natural`, and `Default` remain absent.
 
-Go 1.27 RC3 compiler probes confirm generic inference for every projected constructor and method, including chains whose levels use different key types; explicit generic-method instantiation; target-type inference for generic method values and method expressions; argument-context inference for generic comparison functions; named-function assignability to unnamed callback parameters; and direct `slices`/Stream interoperability. `Ordered` has no value argument from which to infer `T`, so callers instantiate it explicitly, such as `Ordered[int]()`. A `time.Time` key does not satisfy `cmp.Ordered`; it is supported through `On(project, time.Time.Compare)` or as a later fluent level through `ThenOn(project, time.Time.Compare)`.
+Go 1.27 RC3 compiler probes confirm generic inference for every projected constructor and method, including chains whose levels use different key types; explicit generic-method instantiation; target-type inference for generic method values and method expressions; argument-context inference for generic comparison functions; named-function assignability to unnamed callback parameters, including custom comparator types declared by another package; and direct `slices`/Stream interoperability. `Ordered` has no value argument from which to infer `T`, so callers instantiate it explicitly, such as `Ordered[int]()`. A `time.Time` key does not satisfy `cmp.Ordered`; it is supported through `On(project, time.Time.Compare)` or as a later fluent level through `ThenOn(project, time.Time.Compare)`.
 
 ### 22.2 Sign, nil, panic, and ordering laws
 
@@ -726,7 +726,7 @@ Callers must provide a strict weak ordering. Comparator constructs preserve that
 
 `By(key)` and `ByDescending(key)` are construction-lazy. Each reached comparison calls `key(left)` exactly once and then `key(right)` exactly once. The ascending form compares `leftKey` with `rightKey`; the descending form compares `rightKey` with `leftKey`. Evaluating projections in left-right order before changing comparison direction makes side effects and panic paths predictable. A left projection panic skips the right projection; either projection panic skips key comparison.
 
-`On(project, compare)` supports projected values that do not satisfy `cmp.Ordered` or require a custom relation. Each reached comparison projects left exactly once, projects right exactly once, and calls `compare(leftProjected, rightProjected)` exactly once. `OnDescending` preserves that projection and comparator argument order, then reverses only the returned sign using the same overflow-safe normalization as `Reverse`. In particular, it does not call `compare(rightProjected, leftProjected)`. Descending is relative to the ordering represented by `compare`, regardless of how that comparator was constructed. Projection values live only for the current comparison. No constructor caches a key or projection across evaluations, so a sorting algorithm may recompute the same element's key many times.
+`On(project, compare)` supports projected values that do not satisfy `cmp.Ordered` or require a custom relation. Its unnamed comparator parameter accepts ordinary functions, `Func` values, method expressions, and other compatible named function types without conversion. Each reached comparison projects left exactly once, projects right exactly once, and calls `compare(leftProjected, rightProjected)` exactly once; only that result's sign is part of the contract. `OnDescending` preserves that projection and comparator argument order, then reverses only the returned sign using the same overflow-safe normalization as `Reverse`. In particular, it does not call `compare(rightProjected, leftProjected)`. Descending is relative to the ordering represented by `compare`, regardless of how that comparator was constructed. Projection values live only for the current comparison. No constructor caches a key or projection across evaluations, so a sorting algorithm may recompute the same element's key many times.
 
 ### 22.4 Complete reversal and lexicographic composition
 

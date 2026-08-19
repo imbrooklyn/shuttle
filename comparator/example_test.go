@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/imbrooklyn/shuttle/comparator"
+	"github.com/imbrooklyn/shuttle/stream"
 )
 
 func ExampleFunc() {
@@ -86,6 +87,57 @@ func ExampleFunc_Reverse() {
 	slices.SortFunc(values, descending)
 	fmt.Println(values)
 	// Output: [3 2 1]
+}
+
+func ExampleFunc_Reverse_levels() {
+	type item struct {
+		rank int
+		name string
+	}
+	values := []item{{1, "alpha"}, {2, "alpha"}, {1, "beta"}}
+	ascending := comparator.By(func(value item) int {
+		return value.rank
+	}).ThenBy(func(value item) string {
+		return value.name
+	})
+
+	wholeOrderDescending := slices.Clone(values)
+	slices.SortStableFunc(wholeOrderDescending, ascending.Reverse())
+	nameOnlyDescending := slices.Clone(values)
+	slices.SortStableFunc(nameOnlyDescending, comparator.By(func(value item) int {
+		return value.rank
+	}).ThenByDescending(func(value item) string {
+		return value.name
+	}))
+
+	fmt.Println(wholeOrderDescending)
+	fmt.Println(nameOnlyDescending)
+	// Output:
+	// [{2 alpha} {1 beta} {1 alpha}]
+	// [{1 beta} {1 alpha} {2 alpha}]
+}
+
+func ExampleFunc_interoperability() {
+	type item struct {
+		rank int
+		name string
+	}
+	input := []item{{2, "beta"}, {1, "alpha"}, {1, "gamma"}}
+	compare := comparator.By(func(value item) int {
+		return value.rank
+	}).ThenByDescending(func(value item) string {
+		return value.name
+	})
+
+	standard := slices.Clone(input)
+	slices.SortStableFunc(standard, compare)
+	streamed := stream.FromSlice(input).SortedFunc(compare).Collect()
+
+	fmt.Println(standard)
+	fmt.Println(streamed)
+	// Output:
+	// [{1 gamma} {1 alpha} {2 beta}]
+	// [{1 gamma} {1 alpha} {2 beta}]
 }
 
 func ExampleFunc_Then() {

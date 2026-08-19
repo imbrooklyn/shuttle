@@ -43,8 +43,9 @@ func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T] {
 // delegates to compare. Each evaluation calls project with left exactly once,
 // then with right exactly once, and finally calls compare with the projected
 // values in left-right order exactly once. It does not cache projections
-// between evaluations.
-func On[A, B any](project func(A) B, compare Func[B]) Func[A] {
+// between evaluations. The unnamed compare parameter also accepts Func[B] and
+// other compatible named function types without conversion.
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A] {
 	return func(left, right A) int {
 		leftProjected := project(left)
 		rightProjected := project(right)
@@ -58,7 +59,7 @@ func On[A, B any](project func(A) B, compare Func[B]) Func[A] {
 // finally calls compare with the projected values in left-right order exactly
 // once. It reverses only the result sign, so math.MinInt is handled without
 // overflow, and does not cache projections between evaluations.
-func OnDescending[A, B any](project func(A) B, compare Func[B]) Func[A] {
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A] {
 	return func(left, right A) int {
 		leftProjected := project(left)
 		rightProjected := project(right)
@@ -133,8 +134,10 @@ func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T] {
 // projected ordering level appended. Each evaluation calls c first and returns
 // immediately when its result is nonzero. Only after a zero result does it
 // project left exactly once, project right exactly once, and call compare with
-// those projected values in left-right order exactly once.
-func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T] {
+// those projected values in left-right order exactly once. The unnamed compare
+// parameter also accepts Func[K] and other compatible named function types
+// without conversion.
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T] {
 	return func(left, right T) int {
 		if result := c(left, right); result != 0 {
 			return result
@@ -150,7 +153,7 @@ func (c Func[T]) ThenOn[K any](project func(T) K, compare Func[K]) Func[T] {
 // c first and returns immediately when its result is nonzero. Only after a zero
 // result does it project left exactly once, project right exactly once, call
 // compare in left-right order exactly once, and safely reverse the result sign.
-func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare Func[K]) Func[T] {
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T] {
 	return func(left, right T) int {
 		if result := c(left, right); result != 0 {
 			return result

@@ -26,6 +26,10 @@ type record struct {
 
 type namedOrdered int
 
+// alternateComparator is declared in the external comparator_test package to
+// exercise interoperability with a distinct named function type.
+type alternateComparator[T any] func(T, T) int
+
 func TestFuncZeroAndNil(t *testing.T) {
 	var zero comparator.Func[int]
 	if zero != nil {
@@ -179,8 +183,8 @@ func TestOnOrderCountAndResult(t *testing.T) {
 	if len(order) != 0 || compareCalls != 0 {
 		t.Fatal("On evaluated callbacks during construction")
 	}
-	if got := compare(operand{"left", 3}, operand{"right", 5}); got != -17 {
-		t.Fatalf("On result = %d, want -17", got)
+	if got := compare(operand{"left", 3}, operand{"right", 5}); got >= 0 {
+		t.Fatalf("On result = %d, want negative", got)
 	}
 	if want := []string{"project left", "project right", "compare"}; !slices.Equal(order, want) {
 		t.Fatalf("On callback order = %v, want %v", order, want)
@@ -505,8 +509,8 @@ func TestThenOrderShortCircuitAndRepeatedEvaluation(t *testing.T) {
 		t.Fatal("Then evaluated comparators during construction")
 	}
 	for evaluation := 0; evaluation < 2; evaluation++ {
-		if got := combined(1, 2); got != 7 {
-			t.Fatalf("Then result = %d, want 7", got)
+		if got := combined(1, 2); got <= 0 {
+			t.Fatalf("Then result = %d, want positive", got)
 		}
 	}
 	if want := []string{"primary", "second", "primary", "second"}; !slices.Equal(order, want) {
@@ -516,8 +520,8 @@ func TestThenOrderShortCircuitAndRepeatedEvaluation(t *testing.T) {
 		t.Fatalf("Then calls = %v, want primary=2 second=2 third=0", calls)
 	}
 
-	if got := level("only", -9).Then()(1, 2); got != -9 {
-		t.Fatalf("Then with no others = %d, want -9", got)
+	if got := level("only", -9).Then()(1, 2); got >= 0 {
+		t.Fatalf("Then with no others = %d, want negative", got)
 	}
 	if got := level("zero", 0).Then(level("also zero", 0))(1, 2); got != 0 {
 		t.Fatalf("all-zero Then = %d, want 0", got)
@@ -527,8 +531,8 @@ func TestThenOrderShortCircuitAndRepeatedEvaluation(t *testing.T) {
 func TestThenReachedAndSkippedNil(t *testing.T) {
 	var nilCompare comparator.Func[int]
 	skipped := comparator.Func[int](func(int, int) int { return 1 }).Then(nilCompare)
-	if got := skipped(1, 2); got != 1 {
-		t.Fatalf("Then skipped nil result = %d, want 1", got)
+	if got := skipped(1, 2); got <= 0 {
+		t.Fatalf("Then skipped nil result = %d, want positive", got)
 	}
 
 	reached := comparator.Func[int](func(int, int) int { return 0 }).Then(nilCompare)
@@ -538,8 +542,8 @@ func TestThenReachedAndSkippedNil(t *testing.T) {
 		func(int, int) int { return -1 },
 		nilCompare,
 	)
-	if got := skippedLater(1, 2); got != -1 {
-		t.Fatalf("Then skipped later nil result = %d, want -1", got)
+	if got := skippedLater(1, 2); got >= 0 {
+		t.Fatalf("Then skipped later nil result = %d, want negative", got)
 	}
 }
 
@@ -550,16 +554,16 @@ func TestThenSnapshotAliasingAndPanic(t *testing.T) {
 	}
 	combined := comparator.Func[int](func(int, int) int { return 0 }).Then(others...)
 	others[0] = func(int, int) int { return -1 }
-	if got := combined(1, 2); got != 1 {
-		t.Fatalf("Then did not snapshot descriptors: got %d, want 1", got)
+	if got := combined(1, 2); got <= 0 {
+		t.Fatalf("Then did not snapshot descriptors: got %d, want positive", got)
 	}
 
 	direction := 1
 	captured := comparator.Func[int](func(int, int) int { return direction })
 	aliased := comparator.Func[int](func(int, int) int { return 0 }).Then(captured)
 	direction = -1
-	if got := aliased(1, 2); got != -1 {
-		t.Fatalf("Then lost captured-state aliasing: got %d, want -1", got)
+	if got := aliased(1, 2); got >= 0 {
+		t.Fatalf("Then lost captured-state aliasing: got %d, want negative", got)
 	}
 
 	marker := &panicMarker{"then"}
@@ -603,8 +607,8 @@ func TestThenByLevelsOrderShortCircuitAndDirection(t *testing.T) {
 
 	var nilKey func(operand) int
 	skipped := comparator.Func[operand](func(operand, operand) int { return 9 }).ThenBy(nilKey)
-	if got := skipped(operand{}, operand{}); got != 9 {
-		t.Fatalf("ThenBy skipped nil key result = %d, want 9", got)
+	if got := skipped(operand{}, operand{}); got <= 0 {
+		t.Fatalf("ThenBy skipped nil key result = %d, want positive", got)
 	}
 	reached := comparator.Func[operand](func(operand, operand) int { return 0 }).ThenByDescending(nilKey)
 	requirePanic(t, "reached nil ThenByDescending key", func() {
@@ -645,8 +649,8 @@ func TestThenOnLevelsOrderShortCircuitDirectionAndNil(t *testing.T) {
 	if len(order) != 0 {
 		t.Fatal("ThenOn evaluated callbacks during construction")
 	}
-	if got := ascending(operand{"left", 3}, operand{"right", 5}); got != -17 {
-		t.Fatalf("ThenOn result = %d, want -17", got)
+	if got := ascending(operand{"left", 3}, operand{"right", 5}); got >= 0 {
+		t.Fatalf("ThenOn result = %d, want negative", got)
 	}
 	if want := []string{"primary", "project left", "project right", "compare"}; !slices.Equal(order, want) {
 		t.Fatalf("ThenOn callback order = %v, want %v", order, want)
@@ -674,8 +678,8 @@ func TestThenOnLevelsOrderShortCircuitDirectionAndNil(t *testing.T) {
 		nilProject,
 		nilCompare,
 	)
-	if got := skippedProject(operand{}, operand{}); got != -3 {
-		t.Fatalf("ThenOn skipped nil callbacks result = %d, want -3", got)
+	if got := skippedProject(operand{}, operand{}); got >= 0 {
+		t.Fatalf("ThenOn skipped nil callbacks result = %d, want negative", got)
 	}
 	requirePanic(t, "reached nil ThenOn projection", func() {
 		comparator.Func[operand](func(operand, operand) int { return 0 }).ThenOn(
@@ -872,16 +876,16 @@ func TestInferenceMethodValuesExpressionsAndAssignability(t *testing.T) {
 		t.Fatalf("ThenByDescending method value result = %d, want positive", got)
 	}
 
-	var thenOnValue func(func(record) time.Time, comparator.Func[time.Time]) comparator.Func[record] = primary.ThenOn
+	var thenOnValue func(func(record) time.Time, func(time.Time, time.Time) int) comparator.Func[record] = primary.ThenOn
 	if got := thenOnValue(func(value record) time.Time { return value.createdAt }, time.Time.Compare)(earlier, later); got >= 0 {
 		t.Fatalf("ThenOn method value result = %d, want negative", got)
 	}
-	var thenOnExpression func(comparator.Func[record], func(record) time.Time, comparator.Func[time.Time]) comparator.Func[record] = comparator.Func[record].ThenOn
+	var thenOnExpression func(comparator.Func[record], func(record) time.Time, func(time.Time, time.Time) int) comparator.Func[record] = comparator.Func[record].ThenOn
 	if got := thenOnExpression(primary, func(value record) time.Time { return value.createdAt }, time.Time.Compare)(earlier, later); got >= 0 {
 		t.Fatalf("ThenOn method expression result = %d, want negative", got)
 	}
 
-	var thenOnDescendingValue func(func(record) time.Time, comparator.Func[time.Time]) comparator.Func[record] = primary.ThenOnDescending
+	var thenOnDescendingValue func(func(record) time.Time, func(time.Time, time.Time) int) comparator.Func[record] = primary.ThenOnDescending
 	if got := thenOnDescendingValue(func(value record) time.Time { return value.createdAt }, time.Time.Compare)(earlier, later); got <= 0 {
 		t.Fatalf("ThenOnDescending method value result = %d, want positive", got)
 	}
@@ -891,6 +895,28 @@ func TestInferenceMethodValuesExpressionsAndAssignability(t *testing.T) {
 		ThenOn(func(value record) time.Time { return value.createdAt }, time.Time.Compare).
 		ThenByDescending(func(value record) int { return value.id })
 	_ = mixedKeyTypes
+}
+
+func TestAlternateNamedComparatorInteroperability(t *testing.T) {
+	compareKey := alternateComparator[int](cmp.Compare[int])
+	project := func(value operand) int { return value.key }
+	left := operand{key: 1}
+	right := operand{key: 2}
+
+	if got := comparator.On(project, compareKey)(left, right); got >= 0 {
+		t.Fatalf("On with alternate named comparator = %d, want negative", got)
+	}
+	if got := comparator.OnDescending(project, compareKey)(left, right); got <= 0 {
+		t.Fatalf("OnDescending with alternate named comparator = %d, want positive", got)
+	}
+
+	primary := comparator.Func[operand](func(operand, operand) int { return 0 })
+	if got := primary.ThenOn(project, compareKey)(left, right); got >= 0 {
+		t.Fatalf("ThenOn with alternate named comparator = %d, want negative", got)
+	}
+	if got := primary.ThenOnDescending(project, compareKey)(left, right); got <= 0 {
+		t.Fatalf("ThenOnDescending with alternate named comparator = %d, want positive", got)
+	}
 }
 
 func TestImmutableComparatorConcurrentEvaluation(t *testing.T) {
