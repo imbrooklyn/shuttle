@@ -67,6 +67,16 @@ func TestGenericStreamMethodValuesAndExpressions(t *testing.T) {
 	requireSliceEqual(t, methodExpression(stream.Of(3, 4), func(value int) string {
 		return string(rune('a' + value - 1))
 	}).Collect(), []string{"c", "d"})
+
+	var flatMapSliceValue func(func(int) []string) stream.Stream[string] = stream.Of(1, 2).FlatMapSlice
+	requireSliceEqual(t, flatMapSliceValue(func(value int) []string {
+		return []string{string(rune('a' + value - 1)), "!"}
+	}).Collect(), []string{"a", "!", "b", "!"})
+
+	flatMapSliceExpression := stream.Stream[int].FlatMapSlice[string]
+	requireSliceEqual(t, flatMapSliceExpression(stream.Of(3, 4), func(value int) []string {
+		return []string{string(rune('a' + value - 1))}
+	}).Collect(), []string{"c", "d"})
 }
 
 func TestTakeAndSkipConsumptionBoundaries(t *testing.T) {
@@ -220,6 +230,105 @@ func TestFlatMapOrderTerminationAndCleanup(t *testing.T) {
 	outer.FlatMap(inner).Take(2).Collect()
 	if !outerCleaned.Load() || !innerCleaned.Load() {
 		t.Fatalf("cleanup outer=%v inner=%v", outerCleaned.Load(), innerCleaned.Load())
+	}
+}
+
+func TestFlatMapSliceSemantics(t *testing.T) {
+	type branch struct {
+		leaves []int
+	}
+	type root struct {
+		branches []branch
+	}
+
+	roots := []root{
+		{branches: []branch{{leaves: nil}, {leaves: []int{}}, {leaves: []int{1, 2}}}},
+		{branches: []branch{{leaves: []int{3}}}},
+	}
+	rootCalls := 0
+	branchCalls := 0
+	pipeline := stream.FromSlice(roots).
+		FlatMapSlice(func(value root) []branch {
+			rootCalls++
+			return value.branches
+		}).
+		FlatMapSlice(func(value branch) []int {
+			branchCalls++
+			return value.leaves
+		})
+	if rootCalls != 0 || branchCalls != 0 {
+		t.Fatal("FlatMapSlice invoked callbacks at construction")
+	}
+	requireSliceEqual(t, pipeline.Collect(), []int{1, 2, 3})
+	if rootCalls != 2 || branchCalls != 4 {
+		t.Fatalf("first traversal calls: roots=%d branches=%d, want 2 and 4", rootCalls, branchCalls)
+	}
+	requireSliceEqual(t, pipeline.Collect(), []int{1, 2, 3})
+	if rootCalls != 4 || branchCalls != 8 {
+		t.Fatalf("second traversal calls: roots=%d branches=%d, want 4 and 8", rootCalls, branchCalls)
+	}
+
+	aliasedInner := []int{1, 2}
+	var aliasedOutput []int
+	stream.Of(0).FlatMapSlice(func(int) []int { return aliasedInner }).Seq()(func(value int) bool {
+		aliasedOutput = append(aliasedOutput, value)
+		if value == 1 {
+			aliasedInner[1] = 9
+		}
+		return true
+	})
+	requireSliceEqual(t, aliasedOutput, []int{1, 9})
+
+	probe := new(sequenceProbe)
+	callbackCalls := 0
+	emitted := 0
+	got := stream.FromSeq(instrumentedSeq([][]int{{1, 2, 3}, {4}}, probe)).
+		FlatMapSlice(func(values []int) []int {
+			callbackCalls++
+			return values
+		}).
+		Inspect(func(int) { emitted++ }).
+		Take(2).
+		Collect()
+	requireSliceEqual(t, got, []int{1, 2})
+	if probe.consumed.Load() != 1 || probe.cleanups.Load() != 1 || callbackCalls != 1 || emitted != 2 {
+		t.Fatalf("early stop consumed=%d cleanup=%d callbacks=%d emitted=%d",
+			probe.consumed.Load(), probe.cleanups.Load(), callbackCalls, emitted)
+	}
+
+	var nilCallback func(int) []string
+	if got := stream.Empty[int]().FlatMapSlice(nilCallback).Collect(); got != nil {
+		t.Fatalf("empty FlatMapSlice with nil callback = %v, want nil", got)
+	}
+	requirePanics(t, "reached nil FlatMapSlice callback", func() {
+		stream.Of(1).FlatMapSlice(nilCallback).Collect()
+	})
+
+	callbackPanic := errors.New("flat-map-slice callback")
+	requirePanicValue(t, callbackPanic, func() {
+		stream.Of(1).FlatMapSlice(func(int) []int { panic(callbackPanic) }).Collect()
+	})
+	downstreamPanic := errors.New("flat-map-slice downstream")
+	requirePanicValue(t, downstreamPanic, func() {
+		stream.Of(1).FlatMapSlice(func(int) []int { return []int{1, 2} }).Seq()(func(int) bool {
+			panic(downstreamPanic)
+		})
+	})
+
+	position := 0
+	singleUse := stream.FromSeq(func(yield func([]int) bool) {
+		values := [][]int{{1}, {2}}
+		for position < len(values) {
+			value := values[position]
+			position++
+			if !yield(value) {
+				return
+			}
+		}
+	}).FlatMapSlice(func(values []int) []int { return values })
+	requireSliceEqual(t, singleUse.Collect(), []int{1, 2})
+	if got := singleUse.Collect(); got != nil {
+		t.Fatalf("replayed single-use FlatMapSlice = %v, want nil", got)
 	}
 }
 

@@ -35,6 +35,27 @@ func (s Stream[T]) FlatMap[R any](fn func(T) Stream[R]) Stream[R] {
 	}}
 }
 
+// FlatMapSlice returns a lazy Stream that traverses each slice returned by fn
+// before requesting the next outer value. Nil and empty slices contribute no
+// values. It preserves outer and inner encounter order, propagates downstream
+// false, takes O(n+q) time plus callback work, and uses O(1) traversal state.
+// Each traversal invokes fn once for every reached outer value. It makes no
+// defensive copy of returned slice storage or elements, caches nothing, and
+// inherits source replay behavior. Source, callback, and downstream panics
+// propagate unchanged.
+func (s Stream[T]) FlatMapSlice[R any](fn func(T) []R) Stream[R] {
+	return Stream[R]{seq: func(yield func(R) bool) {
+		s.Seq()(func(value T) bool {
+			for _, inner := range fn(value) {
+				if !yield(inner) {
+					return false
+				}
+			}
+			return true
+		})
+	}}
+}
+
 // Filter returns a lazy, infinite-safe Stream containing values accepted by
 // predicate in encounter order. It takes O(n) time plus predicate work, uses
 // O(1) traversal state, and propagates downstream false.

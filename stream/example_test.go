@@ -46,6 +46,23 @@ func ExampleZip() {
 	// Output: [{a 1} {b 2}]
 }
 
+func ExampleStream_FlatMapSlice() {
+	type family struct {
+		names []string
+	}
+
+	names := stream.Of(
+		family{names: []string{"lion", "tiger"}},
+		family{names: nil},
+		family{names: []string{"gorilla"}},
+	).FlatMapSlice(func(value family) []string {
+		return value.names
+	}).Collect()
+
+	fmt.Println(names)
+	// Output: [lion tiger gorilla]
+}
+
 func ExampleChunk() {
 	chunks := stream.Chunk(stream.Range(1, 8), 3).Collect()
 	fmt.Println(chunks)

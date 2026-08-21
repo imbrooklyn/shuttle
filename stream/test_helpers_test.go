@@ -13,8 +13,8 @@ type sequenceProbe struct {
 	cleanups atomic.Int64
 }
 
-func instrumentedSeq(values []int, probe *sequenceProbe) iter.Seq[int] {
-	return func(yield func(int) bool) {
+func instrumentedSeq[T any](values []T, probe *sequenceProbe) iter.Seq[T] {
+	return func(yield func(T) bool) {
 		probe.starts.Add(1)
 		defer probe.cleanups.Add(1)
 		for _, value := range values {
@@ -38,6 +38,16 @@ func requirePanics(t *testing.T, name string, fn func()) {
 	defer func() {
 		if recover() == nil {
 			t.Fatalf("%s did not panic", name)
+		}
+	}()
+	fn()
+}
+
+func requirePanicValue(t *testing.T, want any, fn func()) {
+	t.Helper()
+	defer func() {
+		if got := recover(); got != want {
+			t.Fatalf("panic = %#v, want %#v", got, want)
 		}
 	}()
 	fn()

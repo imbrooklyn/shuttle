@@ -2,6 +2,11 @@ name: Benchmarks
 
 on:
   workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Optional tag, branch, or commit to use as the benchmark baseline
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -9,15 +14,80 @@ on:
 permissions:
   contents: read
 
+env:
+  GO_VERSION: '1.27.0'
+  GOTOOLCHAIN: local
+  BENCHSTAT_VERSION: 'v0.0.0-20260709024250-82a0b07e230d'
+  INITIAL_BENCHMARK_BASE: '06d7c21d592c9c15b0b1833427110cb3f5bb00fe'
+
 jobs:
   benchmark:
-    name: Allocation-aware benchmark snapshot
+    name: Baseline comparison and allocation snapshot
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: '1.27.0'
+          fetch-depth: 0
+          path: candidate
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
           check-latest: false
-      - run: go test ./... -run=^$ -bench=. -benchmem -benchtime=1x
+      - name: Select benchmark baseline
+        id: baseline
+        working-directory: candidate
+        shell: bash
+        env:
+          REQUESTED_BASE: ${{ inputs.base_ref }}
+        run: |
+          base_ref="${REQUESTED_BASE}"
+          if [[ -z "${base_ref}" ]]; then
+            while IFS= read -r tag; do
+              if [[ "${tag}" != "${GITHUB_REF_NAME}" ]]; then
+                base_ref="${tag}"
+                break
+              fi
+            done < <(git tag --sort=-version:refname --merged HEAD)
+          fi
+          if [[ -z "${base_ref}" ]]; then
+            base_ref="${INITIAL_BENCHMARK_BASE}"
+          fi
+          git rev-parse --verify "${base_ref}^{commit}"
+          echo "ref=${base_ref}" >> "${GITHUB_OUTPUT}"
+          echo "Using benchmark baseline ${base_ref}"
+      - name: Check out benchmark baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.baseline.outputs.ref }}
+          path: baseline
+      - name: Install pinned benchmark comparison tool
+        run: go install golang.org/x/perf/cmd/benchstat@${{ env.BENCHSTAT_VERSION }}
+      - name: Run baseline benchmarks
+        working-directory: baseline
+        shell: bash
+        run: go test -p=1 ./... -run=^$ -bench=. -benchmem -count=10 -benchtime=500ms | tee "${RUNNER_TEMP}/baseline.txt"
+      - name: Run candidate benchmarks
+        working-directory: candidate
+        shell: bash
+        run: go test -p=1 ./... -run=^$ -bench=. -benchmem -count=10 -benchtime=500ms | tee "${RUNNER_TEMP}/candidate.txt"
+      - name: Generate benchstat report
+        shell: bash
+        run: benchstat "${RUNNER_TEMP}/baseline.txt" "${RUNNER_TEMP}/candidate.txt" | tee "${RUNNER_TEMP}/benchstat.txt"
+      - name: Add report to workflow summary
+        shell: bash
+        run: |
+          echo '```text' >> "${GITHUB_STEP_SUMMARY}"
+          cat "${RUNNER_TEMP}/benchstat.txt" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload raw benchmarks and comparison
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmarks-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/baseline.txt
+            ${{ runner.temp }}/candidate.txt
+            ${{ runner.temp }}/benchstat.txt
+          if-no-files-found: error
+          retention-days: 90

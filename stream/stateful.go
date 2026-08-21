@@ -5,6 +5,11 @@ import (
 	"slices"
 )
 
+// maxInitialBufferCapacity bounds capacity selected solely from a requested
+// chunk or window size. Buffers still grow on demand when the source contains
+// enough values to require it.
+const maxInitialBufferCapacity = 256
+
 // DistinctBy returns a lazy Stream containing the first value for each key in
 // encounter order. Its per-traversal key set uses O(u) additional memory and
 // expected O(n) time. It propagates downstream false and is conditionally safe
@@ -35,15 +40,20 @@ func Distinct[T comparable](s Stream[T]) Stream[T] {
 // Chunk lazily partitions s into independently owned slices of at most size.
 // It emits a final non-empty partial chunk and panics immediately for size <= 0.
 // Chunk is infinite-safe, preserves order, uses O(size) working memory, and
-// propagates downstream false without consuming a later chunk.
+// propagates downstream false without consuming a later chunk. Its working
+// buffer is allocated on first demand with implementation-bounded initial
+// capacity, then may grow to size; callers must still validate untrusted sizes.
 func Chunk[T any](s Stream[T], size int) Stream[[]T] {
 	if size <= 0 {
 		panic("stream: Chunk size must be positive")
 	}
 	return Stream[[]T]{seq: func(yield func([]T) bool) {
-		buffer := make([]T, 0, size)
+		var buffer []T
 		keepGoing := true
 		s.Seq()(func(value T) bool {
+			if buffer == nil {
+				buffer = make([]T, 0, min(size, maxInitialBufferCapacity))
+			}
 			buffer = append(buffer, value)
 			if len(buffer) < size {
 				return true
@@ -77,7 +87,9 @@ func Window[T any](s Stream[T], size int) Stream[[]T] {
 // 2*step, and so on. It supports overlap and gaps and panics immediately unless
 // size and step are positive. WindowStep is infinite-safe, ordered, uses O(size)
 // working memory, takes O(n+w*size) time including owned copies, and propagates
-// downstream false before consuming gaps or later windows.
+// downstream false before consuming gaps or later windows. Its working buffer
+// is allocated on first demand with implementation-bounded initial capacity,
+// then may grow to size; callers must still validate untrusted sizes.
 func WindowStep[T any](s Stream[T], size, step int) Stream[[]T] {
 	if size <= 0 {
 		panic("stream: WindowStep size must be positive")
@@ -86,12 +98,15 @@ func WindowStep[T any](s Stream[T], size, step int) Stream[[]T] {
 		panic("stream: WindowStep step must be positive")
 	}
 	return Stream[[]T]{seq: func(yield func([]T) bool) {
-		buffer := make([]T, 0, size)
+		var buffer []T
 		gap := 0
 		s.Seq()(func(value T) bool {
 			if gap != 0 {
 				gap--
 				return true
+			}
+			if buffer == nil {
+				buffer = make([]T, 0, min(size, maxInitialBufferCapacity))
 			}
 			buffer = append(buffer, value)
 			if len(buffer) < size {

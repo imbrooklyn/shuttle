@@ -116,7 +116,7 @@ stream    ───────▶ optional ────▶ Go standard library
 
 `comparator` imports none of the other Shuttle packages. Its named function type is assignable to Stream's existing unnamed `func(T, T) int` parameters and to equivalent standard-library `slices` parameters. Stream does not import `comparator`, so ordering interoperability adds no package cycle or public API change. Comparator uses only the standard library and never uses reflection.
 
-Runtime packages have no third-party dependencies. Pinned development tools such as `staticcheck`, `govulncheck`, and an API-diff tool are build and release tooling, not runtime dependencies.
+Runtime packages have no third-party dependencies. Pinned development tools such as `staticcheck`, `govulncheck`, and `benchstat` are build and release tooling, not runtime dependencies. Public API review uses a deterministic `go doc -all` snapshot produced by the pinned Go toolchain rather than adding a runtime dependency.
 
 ## 5. Concrete value types
 
@@ -270,7 +270,7 @@ All intermediate Stream operators are lazy at construction. They fall into two e
 Incremental operators request upstream values only as demand progresses:
 
 ```text
-Map, FlatMap, Filter, FilterMap, Inspect
+Map, FlatMap, FlatMapSlice, Filter, FilterMap, Inspect
 Take, Skip, TakeWhile, SkipWhile, Scan
 Enumerate, Concat, Zip, DistinctBy
 Chunk, Window, WindowStep
@@ -315,13 +315,13 @@ Infinite streams are first-class. The API uses three documentation categories:
 - **conditionally infinite-safe**: can be useful on infinite input but termination or bounded memory depends on data or an early answer;
 - **finite-only**: requires end-of-stream to emit its first value or return its terminal result.
 
-`Map`, `Filter`, `Take`, `Skip`, `Scan`, `Zip`, `Chunk`, and `Window` are infinite-safe. `DistinctBy` is conditional because its key set can grow without bound and an infinite suffix containing only seen keys can consume forever without output. `Any`, `All`, `None`, `Find`, and `ForEachErr` are conditional because they return on a decisive value or error but otherwise await the end. `SortedFunc`, `Reverse`, `Collect`, `Count`, `Last`, reductions, extrema, `ToMap`, and `GroupBy` are finite-only.
+`Map`, `FlatMap`, `FlatMapSlice`, `Filter`, `Take`, `Skip`, `Scan`, `Zip`, `Chunk`, and `Window` are infinite-safe. `DistinctBy` is conditional because its key set can grow without bound and an infinite suffix containing only seen keys can consume forever without output. `Any`, `All`, `None`, `Find`, and `ForEachErr` are conditional because they return on a decisive value or error but otherwise await the end. `SortedFunc`, `Reverse`, `Collect`, `Count`, `Last`, reductions, extrema, `ToMap`, and `GroupBy` are finite-only.
 
 “Finite-only” is a precondition on useful completion, not a run-time check. Shuttle cannot detect that a source is infinite. Applying a barrier or full terminal to an infinite stream can run forever or exhaust memory.
 
 ## 10. Concurrency model
 
-Core Stream has no implicit concurrency. `Map`, `Filter`, `FlatMap`, and every other operator invoke callbacks sequentially within one traversal and never create a worker pool. Shuttle never invokes a user callback concurrently with itself as part of one conforming traversal.
+Core Stream has no implicit concurrency. `Map`, `Filter`, `FlatMap`, `FlatMapSlice`, and every other operator invoke callbacks sequentially within one traversal and never create a worker pool. Shuttle never invokes a user callback concurrently with itself as part of one conforming traversal.
 
 Comparator and predicate compositions likewise evaluate synchronously and serially within one call. Immutable descriptors are safe for concurrent evaluation only when their callbacks, captured state, projected values, and compared values are safe for concurrent access. Shuttle adds no lock around caller-owned mutable state.
 
@@ -346,7 +346,11 @@ All value movement is shallow Go assignment unless a slice-output rule says othe
 
 `FromSlice` is the explicit zero-copy view. It captures the supplied slice header, including its length, and reads elements during each traversal. Replacing an element in the captured range is visible to later traversal; changing the caller's slice length is not. Mutation concurrent with traversal follows normal Go data-race rules.
 
+`FlatMapSlice` directly ranges over each slice returned by its callback. It makes no defensive copy and does not cache the slice or its elements, so ordinary Go value passing, shallow aliasing, and mutation visibility apply while that inner slice is active. The callback is re-invoked once for every reached outer element on every traversal.
+
 `Chunk`, `Window`, and `WindowStep` prioritize ownership safety over buffer reuse. Every emitted slice has stable contents, its own backing storage distinct from every other emitted slice and from internal working buffers, and `cap(result) == len(result)`. Callers may retain or mutate it after the next value is requested. Element-internal references remain shallow aliases.
+
+Chunk and window working buffers allocate only after the source supplies a value. Their initial capacity is bounded by an implementation-defined constant rather than selected directly from an arbitrarily large requested size. They still grow on demand to `size` when enough input is consumed, so complete windows retain the documented `O(size)` bound and callers must still validate sizes derived from external requests.
 
 `Collect` returns a newly built slice and returns nil for an empty stream, matching `slices.Collect`. `AppendTo` follows `append` ownership: it may reuse the destination backing array and preserves the destination's nilness when no values are appended. `ToMap` and `ToMapWith` always return a newly allocated non-nil map. `GroupBy` returns nil for empty input and returns stable group slices for non-empty input.
 
@@ -398,7 +402,7 @@ The design therefore separates operations as follows:
 - transformations whose result structurally embeds the receiver element are package functions: `Enumerate`, `Zip`, `Chunk`, `Window`, and `WindowStep`;
 - `Sum` is omitted. It would require a new public numeric constraint and policy for integer overflow, floating-point order, complex values, durations, and user-defined numeric types. `Reduce` is explicit and sufficient in v1.
 
-These package functions are not pre-1.27 compatibility fallbacks. They are the valid Go 1.27 expression of receiver-element constraints and structurally transformed receiver types. Generic methods remain the canonical form for `Map`, `FlatMap`, `FilterMap`, `Scan`, and other results based on an independently inferred method type parameter.
+These package functions are not pre-1.27 compatibility fallbacks. They are the valid Go 1.27 expression of receiver-element constraints and structurally transformed receiver types. Generic methods remain the canonical form for `Map`, `FlatMap`, `FlatMapSlice`, `FilterMap`, `Scan`, and other results based on an independently inferred method type parameter.
 
 ## 14. Pairs, Seq2, and deterministic grouping
 
@@ -443,8 +447,16 @@ Each public name represents one concept. The following choices are deliberate:
 - `WindowStep(s, size, step)`, with `Window(s, size)` as the common step-one form;
 - `DistinctBy` plus the constrained `Distinct` function, with no reflection-based equality;
 - `Contains` only for comparable elements; arbitrary matching is already `Any(predicate)`.
+- `FlatMap` for arbitrary inner Streams and `FlatMapSlice` for the common
+  slice-backed projection, without reflection, `any`, or an overloaded callback.
 
 `FromFile`, `FromReader`, `FromHTTP`, and `FromChannel` are excluded because early termination needs an ownership or cancellation protocol. `Parallel` is excluded because ordering, error arbitration, backpressure, and goroutine lifetime require a separate design.
+
+`MapMulti` remains a research item rather than v1 API. A callback shaped as
+`func(T, func(R))` can keep emitting after downstream has returned false, so it
+cannot enforce Shuttle's early-termination contract. It may be reconsidered
+only after benchmarks show a material case not served by `FlatMapSlice` and a
+signature makes stop propagation and callback lifetime unambiguous.
 
 No API is reserved merely for symmetry. New v1 surface requires a concrete use case and a compatibility review.
 
@@ -458,6 +470,8 @@ Targets:
 - Predicate `Not`, `And`, `Or`, `Always`, `Equal`, `EqualFunc`, and `On` allocate zero times per evaluation after construction when callbacks themselves do not allocate; `And` and `Or` may allocate once to snapshot non-empty variadic descriptors at construction;
 - Optional `Map`, `FlatMap`, `Filter`, `Inspect`, and extraction allocate zero times when callbacks and values do not escape;
 - Stream `Map`, `Filter`, `Inspect`, `Take`, `Skip`, `TakeWhile`, and `SkipWhile` allocate zero times per element;
+- `FlatMapSlice` adds no allocation proportional to outer or inner element count
+  when its callback returns existing storage and downstream collection is excluded;
 - pipeline construction and traversal setup may allocate a bounded number of closures or iterator frames;
 - `Zip` may have bounded traversal setup cost from one `iter.Pull`, never per-pair allocation;
 - stateful maps, barrier buffers, collected results, chunks, and windows allocate according to their documented output or working state.
@@ -467,6 +481,7 @@ Benchmarks compare a direct loop and Shuttle at input sizes 10, 1K, and 1M for:
 ```text
 Filter + Map + Take
 FlatMap
+FlatMapSlice against both a direct nested loop and FlatMap + FromSlice
 DistinctBy
 Zip
 Chunk
@@ -479,7 +494,7 @@ Predicate benchmarks separately compare direct Boolean expressions with `Not`, `
 
 Comparator benchmarks compare equivalent direct comparison expressions with `Ordered`, `By`, `ByDescending`, `On`, `OnDescending`, `Reverse`, `Then`, every fluent projected-level method, and a three-level mixed ordering. Separate construction benchmarks expose closure and variadic snapshot costs. Interoperability benchmarks compare direct and composed comparators through `slices.SortStableFunc` and `Stream.SortedFunc`, including identical per-iteration input copying and sorting work.
 
-They report `ns/op`, `B/op`, and `allocs/op`, use equivalent work and preallocation assumptions, consume results so the compiler cannot remove work, and separate pipeline construction from repeated traversal where relevant. Single-use and reusable sources receive separate benchmarks when setup materially differs.
+They report `ns/op`, `B/op`, and `allocs/op`, use equivalent work and preallocation assumptions, consume results so the compiler cannot remove work, and separate pipeline construction from repeated traversal where relevant. `FlatMapSlice` benchmarks include many-small-slice and one-large-slice shapes so wrapper cost is distinguished from inner-element traversal. Chunk and window buffer benchmarks cover ordinary sizes on both sides of the internal initial-capacity threshold plus huge-size/short-input cases. Single-use and reusable sources receive separate benchmarks when setup materially differs.
 
 Timing thresholds are not hard cross-platform CI gates because scheduler, compiler, and hardware variance makes them noisy. Allocation regressions in the zero-per-element operators are testable gates. Release candidates require a benchmark comparison on a pinned runner, with any material regression explained.
 
@@ -493,7 +508,7 @@ Comparator tests cover a zero and nil `Func`, construction laziness, natural ord
 
 Predicate tests cover a zero and nil `Func`, construction laziness, complete Boolean truth tables, exact left-to-right callback order and counts, short-circuiting around reached and skipped nil functions, unchanged panic propagation, variadic descriptor snapshots, normal aliasing of captured state, constructor and adapter argument order, every nilable reflection kind, named nilable types, typed nils stored in interfaces, generic inference, reverse inference, method values, method expressions, and direct Optional/Stream Filter use. Concurrent evaluation tests use immutable or explicitly synchronized captured state; unsynchronized caller-owned mutation is documented as a caller data race rather than executed in the race suite.
 
-Stream tests cover empty, singleton, large, reusable, single-use, and infinite sources; identity and always-true/false properties; all count and window boundaries; empty inner streams; stable distinct and sorting behavior; shorter-left and shorter-right Zip behavior; early termination of Zip and Concat; exact callback and upstream-consumption counts; panic propagation; and cleanup after false or panic.
+Stream tests cover empty, singleton, large, reusable, single-use, and infinite sources; identity and always-true/false properties; all count and window boundaries; empty inner streams and nil or empty inner slices; stable distinct and sorting behavior; shorter-left and shorter-right Zip behavior; early termination of FlatMap, FlatMapSlice, Zip, and Concat; exact callback and upstream-consumption counts; panic propagation; and cleanup after false or panic. Huge chunk and window sizes are exercised with empty and short inputs without parameter-proportional initial allocation.
 
 Property and fuzz tests compare operators with simple reference loops for finite generated slices. Important properties include:
 
@@ -534,8 +549,9 @@ It must also satisfy:
 - dedicated bounded fuzz runs pass on Linux amd64 and arm64-capable infrastructure;
 - `staticcheck` passes with a pinned version that supports Go 1.27 syntax;
 - `govulncheck ./...` passes against a recorded current database during release qualification;
-- the public API diff contains only changes permitted by the intended semantic version;
-- benchmark and allocation comparisons have been reviewed.
+- the committed public API and GoDoc snapshot exactly matches the candidate, and the diff from the pull-request base or previous release contains only changes permitted by the intended semantic version;
+- benchmark and allocation comparisons have been reviewed under `BENCHMARKS.md`; and
+- every third-party GitHub Action is pinned to a full commit SHA with the corresponding release tag retained as an inline comment.
 
 The required platform matrix is:
 
@@ -547,7 +563,7 @@ Windows: amd64, arm64 where a reliable native runner is available
 
 At minimum, tests run natively on Linux amd64/arm64, macOS arm64, and Windows amd64; compilation is checked for every listed supported pair. Race tests run on every required native runner supported by Go's race detector. A platform without dependable public arm64 runners is not silently claimed as runtime-tested; the release record distinguishes native tests from cross-compilation.
 
-`staticcheck` is required for v1, and its pinned release must parse and analyze stable Go 1.27 generic methods. Until Staticcheck publishes a stable Go-1.27-capable release, a pinned release candidate that explicitly supports Go 1.27 is permitted and remains blocking. `govulncheck` is required on the default branch, on a schedule, and for release; network availability may make it retryable rather than a per-commit blocking job. Benchmark timing regression is review-gated on controlled hardware, not a noisy universal pass/fail threshold.
+`staticcheck` is required for v1, and its pinned release must parse and analyze stable Go 1.27 generic methods. Until Staticcheck publishes a stable Go-1.27-capable release, a pinned release candidate that explicitly supports Go 1.27 is permitted and remains blocking. `govulncheck` is required on the default branch, on a schedule, and for release; network availability may make it retryable rather than a per-commit blocking job. Benchmark timing regression is review-gated on controlled hardware, not a noisy universal pass/fail threshold. The benchmark workflow saves both raw samples and the report from a pinned `benchstat`; allocation contracts remain ordinary-test hard gates. API CI saves the candidate snapshot, comparison snapshot, and unified diff. Workflows retain `contents: read` as their only repository permission, do not receive ordinary-job secrets, and use Dependabot-reviewed commits to advance Action SHAs.
 
 ## 19. Compatibility policy
 

@@ -28,7 +28,9 @@ baseline is Go 1.27.0.
   uses the natural representation of the stored value.
 - [`stream`](https://pkg.go.dev/github.com/imbrooklyn/shuttle/stream) wraps
   `iter.Seq` with lazy, ordered, sequential transformations and explicit
-  terminals. It adds no hidden errors, worker goroutines, caching, or replay.
+  terminals. `FlatMap` accepts arbitrary inner Streams, while `FlatMapSlice`
+  directly expands slice-backed data. The package adds no hidden errors, worker
+  goroutines, caching, or replay.
 
 The complete rationale and behavioral contract are in [DESIGN.md](DESIGN.md)
 and [API_SPEC.md](API_SPEC.md).
@@ -91,6 +93,26 @@ Output:
 BROOKLYN
 [Brooklyn Shuttle]
 [{Shuttle 1} {Optional 2} {Brooklyn 2}]
+```
+
+For nested DTOs and other slice-backed trees, `FlatMapSlice` removes repeated
+`FromSlice` adapters without weakening the general `FlatMap` API:
+
+```go
+names := stream.FromSlice(orders).
+    FlatMapSlice(func(order AnimalOrder) []AnimalFamily { return order.Families }).
+    FlatMapSlice(func(family AnimalFamily) []AnimalSpecies { return family.Species }).
+    FlatMapSlice(func(species AnimalSpecies) []AnimalSubspecies { return species.Subspecies }).
+    FlatMapSlice(func(subspecies AnimalSubspecies) []Animal { return subspecies.Animals }).
+    Map(func(animal Animal) string { return animal.Name }).
+    Collect()
+```
+
+The complete runnable example composes slice flattening, reusable predicates,
+mixed ordering, grouping, Optional extrema, and chunking:
+
+```bash
+go run ./examples/animals
 ```
 
 The complete comparator API is deliberately small:
@@ -182,6 +204,8 @@ produces `None`. This intentionally loses the presence bit for a present nil.
 - Stream construction is lazy; incremental operators consume only on demand.
 - Stream encounter order, early termination, and source cleanup are preserved.
 - Chunk and window slices are independently owned with `cap(result) == len(result)`.
+- Chunk and window working buffers allocate lazily and do not select an initial
+  capacity proportional to an untrusted requested size.
 - Stateful traversal data is created separately for every traversal.
 - Runtime packages use only the Go standard library.
 
@@ -215,6 +239,9 @@ Go 1.27 patch upgrade must update the documented and CI toolchain pins together.
 
 All four packages include fuzz or property coverage and allocation-aware
 benchmarks. CI distinguishes native tests and race tests from cross-compilation.
+Release benchmark comparison and regression classification are documented in
+[BENCHMARKS.md](BENCHMARKS.md). The reviewed public API and GoDoc snapshot,
+including its regeneration command, is documented in [api/README.md](api/README.md).
 
 ## Release strategy
 

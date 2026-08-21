@@ -1,0 +1,658 @@
+===== comparator =====
+
+package comparator // import "github.com/imbrooklyn/shuttle/comparator"
+
+Package comparator provides small, type-safe primitives for constructing and
+composing three-way comparison functions.
+
+A Func value can be passed directly to standard-library sorting functions and
+to Shuttle Stream comparison operations. Ordered and custom projected levels
+can be composed fluently with independent directions and key types. Comparators
+are construction-lazy, synchronous, sequential, and free of hidden caching or
+concurrency.
+
+TYPES
+
+type Func[T any] func(left, right T) int
+    Func compares left and right. A negative result orders left before right,
+    zero makes them equivalent at that ordering level, and a positive result
+    orders left after right. Only the sign of the result is meaningful. The zero
+    value is a nil function and panics through ordinary nil-function invocation
+    only when evaluation reaches it.
+
+func By[T any, K cmp.Ordered](key func(T) K) Func[T]
+    By returns a construction-lazy ascending comparator over an ordered key.
+    Each evaluation calls key with left exactly once, then with right exactly
+    once, and compares those keys using cmp.Compare. It does not cache keys
+    between evaluations.
+
+func ByDescending[T any, K cmp.Ordered](key func(T) K) Func[T]
+    ByDescending returns a construction-lazy descending comparator over an
+    ordered key. Each evaluation calls key with left exactly once, then with
+    right exactly once, and compares the right key with the left key using
+    cmp.Compare. It does not cache keys between evaluations.
+
+func On[A, B any](project func(A) B, compare func(B, B) int) Func[A]
+    On returns a construction-lazy comparator that projects both operands and
+    delegates to compare. Each evaluation calls project with left exactly once,
+    then with right exactly once, and finally calls compare with the projected
+    values in left-right order exactly once. It does not cache projections
+    between evaluations. The unnamed compare parameter also accepts Func[B] and
+    other compatible named function types without conversion.
+
+func OnDescending[A, B any](project func(A) B, compare func(B, B) int) Func[A]
+    OnDescending returns a construction-lazy comparator that projects both
+    operands and reverses the ordering represented by compare. Each evaluation
+    calls project with left exactly once, then with right exactly once, and
+    finally calls compare with the projected values in left-right order exactly
+    once. It reverses only the result sign, so math.MinInt is handled without
+    overflow, and does not cache projections between evaluations.
+
+func Ordered[T cmp.Ordered]() Func[T]
+    Ordered returns the natural ascending comparator for T. Integer, string,
+    floating-point, and NaN behavior is exactly that of cmp.Compare.
+
+func (c Func[T]) Reverse() Func[T]
+    Reverse returns a construction-lazy comparator that reverses the complete
+    ordering represented by c. Each evaluation calls c with left and right
+    exactly once, then reverses only its result sign. The returned nonzero
+    result is normalized to -1 or 1, so math.MinInt is handled without overflow.
+    Panics from c propagate unchanged.
+
+func (c Func[T]) Then(others ...Func[T]) Func[T]
+    Then returns a construction-lazy lexicographic composition. It evaluates
+    c first, followed by others from left to right, and stops at the first
+    nonzero result. The variadic comparator descriptors are shallow-snapshotted
+    during construction. A skipped nil comparator is not called; a reached nil
+    comparator panics through ordinary Go nil-function invocation.
+
+func (c Func[T]) ThenBy[K cmp.Ordered](key func(T) K) Func[T]
+    ThenBy returns a construction-lazy lexicographic composition with one
+    ascending ordered-key level appended. Each evaluation calls c first and
+    returns immediately when its result is nonzero. Only after a zero result
+    does it call key with left exactly once, then with right exactly once,
+    and compare those keys using cmp.Compare.
+
+func (c Func[T]) ThenByDescending[K cmp.Ordered](key func(T) K) Func[T]
+    ThenByDescending returns a construction-lazy lexicographic composition with
+    one descending ordered-key level appended. Each evaluation calls c first and
+    returns immediately when its result is nonzero. Only after a zero result
+    does it call key with left exactly once, then with right exactly once,
+    and compare the right key with the left key using cmp.Compare.
+
+func (c Func[T]) ThenOn[K any](project func(T) K, compare func(K, K) int) Func[T]
+    ThenOn returns a construction-lazy lexicographic composition with one custom
+    projected ordering level appended. Each evaluation calls c first and returns
+    immediately when its result is nonzero. Only after a zero result does it
+    project left exactly once, project right exactly once, and call compare with
+    those projected values in left-right order exactly once. The unnamed compare
+    parameter also accepts Func[K] and other compatible named function types
+    without conversion.
+
+func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) int) Func[T]
+    ThenOnDescending returns a construction-lazy lexicographic composition with
+    one reversed custom projected ordering level appended. Each evaluation calls
+    c first and returns immediately when its result is nonzero. Only after a
+    zero result does it project left exactly once, project right exactly once,
+    call compare in left-right order exactly once, and safely reverse the result
+    sign.
+
+===== optional =====
+
+package optional // import "github.com/imbrooklyn/shuttle/optional"
+
+Package optional provides an eager, typed representation of a value that may be
+absent.
+
+The zero value of Optional is absent. Presence is independent of the stored
+value, so zero values and typed nil values can be present. Optional values use
+ordinary shallow-copy semantics and are comparable whenever their element type
+is comparable.
+
+FUNCTIONS
+
+func Equal[T comparable](a, b Optional[T]) bool
+    Equal reports state-and-value equality for Optionals with comparable element
+    types.
+
+func EqualFunc[T any](a, b Optional[T], equal func(T, T) bool) bool
+    EqualFunc reports state-and-value equality using equal for two present
+    values. It does not invoke equal when either Optional is absent.
+
+
+TYPES
+
+type Optional[T any] struct {
+	// Has unexported fields.
+}
+    Optional contains either no value or one present value of type T. Its zero
+    value is None. Presence is independent of the stored value.
+
+func Flatten[T any](nested Optional[Optional[T]]) Optional[T]
+    Flatten returns the inner Optional when nested is present and None
+    otherwise.
+
+func FromPtr[T any](ptr *T) Optional[T]
+    FromPtr returns None when ptr is nil and otherwise returns Some containing a
+    shallow copy of the pointed-to value.
+
+func None[T any]() Optional[T]
+    None returns an absent Optional.
+
+func Of[T any](value T, ok bool) Optional[T]
+    Of returns Some(value) when ok is true and None otherwise.
+
+func Some[T any](value T) Optional[T]
+    Some returns an Optional containing value, including when value is a zero or
+    typed nil value.
+
+func (o Optional[T]) Filter(predicate func(T) bool) Optional[T]
+    Filter returns o when it is present and predicate accepts its value.
+    It returns None for an absent or rejected value.
+
+func (o Optional[T]) FlatMap[R any](fn func(T) Optional[R]) Optional[R]
+    FlatMap eagerly applies fn to a present value and returns its Optional
+    result. It returns None without invoking fn when o is absent.
+
+func (o Optional[T]) Inspect(fn func(T)) Optional[T]
+    Inspect invokes fn once for a present value and returns o unchanged.
+
+func (o Optional[T]) IsNone() bool
+    IsNone reports whether o is absent.
+
+func (o Optional[T]) IsSome() bool
+    IsSome reports whether o contains a value.
+
+func (o Optional[T]) IsZero() bool
+    IsZero reports whether o is None.
+
+func (o Optional[T]) Map[R any](fn func(T) R) Optional[R]
+    Map eagerly applies fn to a present value and returns Some of the result.
+    It returns None without invoking fn when o is absent.
+
+func (o Optional[T]) MarshalJSON() ([]byte, error)
+    MarshalJSON encodes None as null and Some exactly as its stored value.
+
+func (o Optional[T]) Match[R any](onSome func(T) R, onNone func() R) R
+    Match invokes and returns exactly one branch: onSome for a present value or
+    onNone for an absent value.
+
+func (o Optional[T]) Must() T
+    Must returns the stored value. It panics when o is None.
+
+func (o Optional[T]) Or(other Optional[T]) Optional[T]
+    Or returns o when it is present and other otherwise.
+
+func (o Optional[T]) OrElse(fallback T) T
+    OrElse returns the stored value when present and fallback otherwise.
+
+func (o Optional[T]) OrElseGet(fallback func() T) T
+    OrElseGet returns the stored value when present. Otherwise it invokes
+    fallback exactly once and returns its result.
+
+func (o Optional[T]) OrGet(other func() Optional[T]) Optional[T]
+    OrGet returns o when it is present. Otherwise it invokes other exactly once
+    and returns its result.
+
+func (o Optional[T]) OrZero() T
+    OrZero returns the stored value when present and the zero value of T
+    otherwise.
+
+func (o Optional[T]) Ptr() *T
+    Ptr returns nil for None. For Some it returns a pointer to a new shallow
+    copy of the stored value.
+
+func (o *Optional[T]) UnmarshalJSON(data []byte) error
+    UnmarshalJSON decodes null as None and any successfully decoded non-null
+    value as Some. A failed decode leaves the receiver unchanged.
+
+func (o Optional[T]) Value() (T, bool)
+    Value returns the stored value and true when o is present. For None it
+    returns the zero value of T and false.
+
+func (o Optional[T]) ZipWith[U, R any](other Optional[U], combine func(T, U) R) Optional[R]
+    ZipWith returns None unless both Optionals are present. When both are
+    present, it invokes combine once and returns Some of the result.
+
+===== predicate =====
+
+package predicate // import "github.com/imbrooklyn/shuttle/predicate"
+
+Package predicate provides small, type-safe predicate composition primitives.
+
+Func is a named function type with the underlying type func(T) bool,
+so its values can be passed directly to APIs such as optional.Optional.Filter
+and stream.Stream.Filter. Composition is lazy at construction and evaluates
+synchronously from left to right with ordinary Go short-circuit and panic
+behavior.
+
+Predicate descriptors are immutable after construction. Values captured by
+callbacks retain normal Go aliasing and concurrency semantics; callers must
+synchronize mutable captured state when predicates are evaluated concurrently.
+
+FUNCTIONS
+
+func IsNil[T any](value T) bool
+    IsNil reports whether value is a nil interface or has a nil dynamic value of
+    channel, function, map, pointer, unsafe-pointer, or slice kind. It returns
+    false for non-nil values and non-nilable kinds without panicking.
+
+    IsNil uses reflection solely to preserve typed-nil semantics when T is an
+    interface. Evaluation boxes value for reflect.ValueOf and has the associated
+    reflection cost; no other predicate operation uses reflection.
+
+func IsNotNil[T any](value T) bool
+    IsNotNil reports the exact logical negation of IsNil(value).
+
+
+TYPES
+
+type Func[T any] func(T) bool
+    Func is a predicate over values of type T. Its zero value is a nil function;
+    constructing a composition around it is valid, and evaluation panics only if
+    execution reaches the nil function call.
+
+func Always[T any](result bool) Func[T]
+    Always returns a predicate that ignores its input and returns result.
+
+func Equal[T comparable](want T) Func[T]
+    Equal returns a predicate that compares each value with want using Go's ==
+    operator. Interface values with dynamically non-comparable contents retain
+    ordinary Go equality behavior and may panic during evaluation.
+
+func EqualFunc[T any](want T, equal func(T, T) bool) Func[T]
+    EqualFunc returns a predicate that calls equal exactly once per evaluation
+    with the current value first and want second. A nil equal function panics
+    only when the returned predicate is evaluated.
+
+func On[A, B any](project func(A) B, predicate Func[B]) Func[A]
+    On returns a predicate that calls project exactly once and then evaluates
+    predicate exactly once with the projected value. The calls are synchronous
+    and ordered; their panics propagate unchanged.
+
+func (p Func[T]) And(others ...Func[T]) Func[T]
+    And returns a construction-lazy predicate that evaluates p followed by
+    others from left to right. Evaluation stops at the first false result. The
+    variadic predicate descriptors are shallow-snapshotted during construction.
+    A nil predicate skipped by short-circuiting is not called; a reached nil
+    predicate panics through ordinary Go nil-function invocation.
+
+func (p Func[T]) Not() Func[T]
+    Not returns a construction-lazy predicate that calls p exactly once and
+    negates its result. Panics from p propagate unchanged.
+
+func (p Func[T]) Or(others ...Func[T]) Func[T]
+    Or returns a construction-lazy predicate that evaluates p followed by
+    others from left to right. Evaluation stops at the first true result. The
+    variadic predicate descriptors are shallow-snapshotted during construction.
+    A nil predicate skipped by short-circuiting is not called; a reached nil
+    predicate panics through ordinary Go nil-function invocation.
+
+===== stream =====
+
+package stream // import "github.com/imbrooklyn/shuttle/stream"
+
+Package stream provides lazy, ordered, sequential composition over Go iterators.
+
+A Stream is a non-caching sequence descriptor. The zero value is empty,
+and reusable or single-use behavior is inherited from the source. Shuttle starts
+no worker goroutines, stores no hidden errors, and propagates downstream early
+termination to conforming iterator sources. FlatMap accepts arbitrary inner
+Streams; FlatMapSlice is the direct slice-backed convenience.
+
+FUNCTIONS
+
+func Contains[T comparable](s Stream[T], value T) bool
+    Contains reports whether s contains value by == and stops at the first
+    match. It uses O(1) state and is conditionally safe for infinite input.
+
+func Max[T cmp.Ordered](s Stream[T]) optional.Optional[T]
+    Max consumes s and returns its greatest naturally ordered value, retaining
+    the first value on ties. It returns None for empty input. It takes O(n)
+    time, uses O(1) state, and requires finite input.
+
+func Min[T cmp.Ordered](s Stream[T]) optional.Optional[T]
+    Min consumes s and returns its least naturally ordered value, retaining the
+    first value on ties. It returns None for empty input. It takes O(n) time,
+    uses O(1) state, and requires finite input.
+
+func ToSeq2[A, B any](s Stream[Pair[A, B]]) iter.Seq2[A, B]
+    ToSeq2 lazily converts a Stream of Pair values into a non-nil two-value
+    iterator sequence. It preserves order, early termination, and source replay
+    behavior with O(1) wrapper state.
+
+
+TYPES
+
+type Group[K comparable, V any] struct {
+	// Key is the key returned by GroupBy for the first value in this group.
+	Key K
+	// Values contains shallow copies in source encounter order. The slice is
+	// caller-owned and stable after GroupBy returns.
+	Values []V
+}
+    Group holds one key and the source-ordered values assigned to that key
+    by GroupBy. Its field names, order, and field set are part of the public
+    compatibility contract.
+
+type Pair[A, B any] struct {
+	// First is the left or first component.
+	First A
+	// Second is the right or second component.
+	Second B
+}
+    Pair holds two shallow values. Its field names, order, and field set are
+    part of the public compatibility contract.
+
+type Stream[T any] struct {
+	// Has unexported fields.
+}
+    Stream is a lazy, ordered sequence descriptor. Its zero value is empty.
+    Copying a Stream does not copy, rewind, cache, or fork its source.
+
+func Chunk[T any](s Stream[T], size int) Stream[[]T]
+    Chunk lazily partitions s into independently owned slices of at most size.
+    It emits a final non-empty partial chunk and panics immediately for size <=
+    0. Chunk is infinite-safe, preserves order, uses O(size) working memory,
+    and propagates downstream false without consuming a later chunk. Its working
+    buffer is allocated on first demand with implementation-bounded initial
+    capacity, then may grow to size; callers must still validate untrusted
+    sizes.
+
+func Distinct[T comparable](s Stream[T]) Stream[T]
+    Distinct returns the first occurrence of each comparable value in encounter
+    order. Its state is independent for every traversal. Expected time is O(n),
+    memory is O(u), downstream false is propagated, and infinite-input safety is
+    conditional.
+
+func Empty[T any]() Stream[T]
+    Empty returns an empty reusable Stream in O(1) time and memory.
+
+func Enumerate[T any](s Stream[T]) Stream[Pair[int, T]]
+    Enumerate returns a lazy Stream pairing values with zero-based consecutive
+    indices. It panics rather than wrapping after math.MaxInt. Enumerate is
+    infinite-safe within the int index space and uses O(1) traversal state.
+
+func FromSeq[T any](seq iter.Seq[T]) Stream[T]
+    FromSeq wraps seq without caching or changing its replay behavior. A nil seq
+    is normalized to an empty Stream. It preserves order, early termination,
+    cleanup, and reusable or single-use behavior in O(1) wrapper state.
+
+func FromSeq2[A, B any](seq iter.Seq2[A, B]) Stream[Pair[A, B]]
+    FromSeq2 lazily converts each two-value iterator element into a Pair.
+    A nil seq is empty. Conversion is lazy, ordered, and uses O(1) wrapper state
+    with no Pair-specific per-element heap allocation.
+
+func FromSlice[T any](values []T) Stream[T]
+    FromSlice returns a reusable zero-copy view of the captured slice range.
+    Element replacements are observed by later traversals. Construction uses
+    O(1) time and memory, and traversal preserves encounter order.
+
+func Generate[T any](next func() T) Stream[T]
+    Generate returns an infinite Stream that invokes next once immediately
+    before every emitted value. Captured callback state is shared across
+    traversals. Generate is infinite-safe and uses O(1) Shuttle state.
+
+func Iterate[T any](seed T, next func(T) T) Stream[T]
+    Iterate returns an infinite Stream that starts with seed and applies next
+    only after the preceding value is accepted and another value is requested.
+    Each traversal has its own current value. Iterate is infinite-safe and uses
+    O(1) traversal state; callback state remains caller-owned.
+
+func Of[T any](values ...T) Stream[T]
+    Of makes a shallow snapshot of values and returns a reusable Stream over
+    the snapshot. Construction takes O(n) time and memory; traversal is lazy,
+    ordered, and uses O(1) state.
+
+func Range(start, end int) Stream[int]
+    Range returns the reusable half-open ascending sequence from start to end.
+    It is empty when start is not less than end and terminates before overflow.
+    Traversal takes O(n) time with O(1) state.
+
+func RangeStep(start, end, step int) Stream[int]
+    RangeStep returns a reusable half-open arithmetic sequence. It panics
+    immediately when step is zero and terminates instead of overflowing int.
+    Traversal takes O(n) time with O(1) state.
+
+func Repeat[T any](value T) Stream[T]
+    Repeat returns an infinite reusable Stream of shallow copies of value.
+    It is infinite-safe and uses O(1) traversal state.
+
+func RepeatN[T any](value T, n int) Stream[T]
+    RepeatN returns a reusable Stream containing n shallow copies of value.
+    It panics immediately when n is negative. Traversal is lazy and uses O(1)
+    state.
+
+func Sorted[T cmp.Ordered](s Stream[T]) Stream[T]
+    Sorted returns a construction-lazy stable natural-order sort of s.
+    It is a finite-only barrier and recollects the source on every traversal.
+    It takes O(n log n) comparisons, retains O(n) values, and applies downstream
+    false only after the barrier.
+
+func Window[T any](s Stream[T], size int) Stream[[]T]
+    Window returns the full, independently owned sliding windows of size from s.
+    It is equivalent to WindowStep(s, size, 1) and panics for size <= 0. Window
+    is infinite-safe, ordered, uses O(size) working memory, and propagates
+    downstream false before consuming a later window.
+
+func WindowStep[T any](s Stream[T], size, step int) Stream[[]T]
+    WindowStep returns independently owned full windows at starts 0, step,
+    2*step, and so on. It supports overlap and gaps and panics immediately
+    unless size and step are positive. WindowStep is infinite-safe, ordered,
+    uses O(size) working memory, takes O(n+w*size) time including owned copies,
+    and propagates downstream false before consuming gaps or later windows.
+    Its working buffer is allocated on first demand with implementation-bounded
+    initial capacity, then may grow to size; callers must still validate
+    untrusted sizes.
+
+func Zip[A, B any](left Stream[A], right Stream[B]) Stream[Pair[A, B]]
+    Zip lazily pairs values at equal positions, using left as the push-style
+    driver. The right pull iterator starts only after the first left value and
+    is stopped on every exit path. Zip is infinite-safe, preserves positional
+    order, propagates downstream false, and uses O(1) state plus iter.Pull
+    setup.
+
+func (s Stream[T]) All(predicate func(T) bool) bool
+    All reports whether predicate accepts every value and stops at the first
+    rejection. It returns true for empty input. It uses O(1) state and is
+    conditionally safe for infinite input.
+
+func (s Stream[T]) Any(predicate func(T) bool) bool
+    Any reports whether predicate accepts any value and stops at the first
+    match. It uses O(1) state and is conditionally safe for infinite input.
+
+func (s Stream[T]) AppendTo[S ~[]T](dst S) S
+    AppendTo appends all values to dst in encounter order and preserves its
+    named slice type. Empty input returns dst unchanged, including nilness.
+    It takes O(n) time, uses ordinary append capacity growth, and requires
+    finite input.
+
+func (s Stream[T]) At(index int) optional.Optional[T]
+    At returns the zero-based element at index and stops upstream. A negative
+    index returns None without invoking upstream. It is infinite-safe for every
+    finite non-negative index and uses O(1) state.
+
+func (s Stream[T]) Collect() []T
+    Collect consumes s into a new slice in encounter order. It returns nil for
+    an empty Stream. It takes O(n) time and returned memory and requires finite
+    input.
+
+func (s Stream[T]) Concat(others ...Stream[T]) Stream[T]
+    Concat returns a lazy Stream containing the receiver followed by others in
+    argument order. It snapshots the variadic descriptor slice at construction.
+    Concat is infinite-safe, propagates downstream false, and uses O(1)
+    traversal state in addition to the O(len(others)) construction snapshot.
+
+func (s Stream[T]) Count() int
+    Count consumes s and returns its element count. It panics instead of
+    wrapping if another element would overflow int. Count uses O(1) state and
+    requires finite input to return.
+
+func (s Stream[T]) DistinctBy[K comparable](key func(T) K) Stream[T]
+    DistinctBy returns a lazy Stream containing the first value for each key in
+    encounter order. Its per-traversal key set uses O(u) additional memory and
+    expected O(n) time. It propagates downstream false and is conditionally safe
+    for infinite input because its key set or a duplicate-only suffix may be
+    unbounded.
+
+func (s Stream[T]) Filter(predicate func(T) bool) Stream[T]
+    Filter returns a lazy, infinite-safe Stream containing values accepted
+    by predicate in encounter order. It takes O(n) time plus predicate work,
+    uses O(1) traversal state, and propagates downstream false.
+
+func (s Stream[T]) FilterMap[R any](fn func(T) optional.Optional[R]) Stream[R]
+    FilterMap returns a lazy, infinite-safe Stream containing the values
+    from present Optional results in encounter order. It takes O(n) time plus
+    callback work, uses O(1) traversal state, and propagates downstream false.
+
+func (s Stream[T]) Find(predicate func(T) bool) optional.Optional[T]
+    Find returns the first value accepted by predicate and stops upstream,
+    or None after exhaustion without a match. It uses O(1) state and is
+    conditionally safe for infinite input because only a match guarantees
+    termination.
+
+func (s Stream[T]) First() optional.Optional[T]
+    First returns the first value and stops upstream, or None when s is empty.
+    It is infinite-safe and uses O(1) state.
+
+func (s Stream[T]) FlatMap[R any](fn func(T) Stream[R]) Stream[R]
+    FlatMap returns a lazy Stream that traverses each fn result completely
+    before requesting the next outer value. Downstream termination stops both
+    traversals. It is infinite-safe for streaming, takes O(n+q) time plus
+    callback work, and uses O(1) Shuttle state outside its active inner source.
+
+func (s Stream[T]) FlatMapSlice[R any](fn func(T) []R) Stream[R]
+    FlatMapSlice returns a lazy Stream that traverses each slice returned by fn
+    before requesting the next outer value. Nil and empty slices contribute no
+    values. It preserves outer and inner encounter order, propagates downstream
+    false, takes O(n+q) time plus callback work, and uses O(1) traversal state.
+    Each traversal invokes fn once for every reached outer value. It makes
+    no defensive copy of returned slice storage or elements, caches nothing,
+    and inherits source replay behavior. Source, callback, and downstream panics
+    propagate unchanged.
+
+func (s Stream[T]) ForEach(fn func(T))
+    ForEach invokes fn once for every value in encounter order. It uses O(1)
+    state and requires finite input to return normally.
+
+func (s Stream[T]) ForEachErr(fn func(T) error) error
+    ForEachErr invokes fn in encounter order and stops at the first non-nil
+    error, returning that error unchanged. It uses O(1) state and is
+    conditionally safe for infinite input because an error can terminate
+    traversal.
+
+func (s Stream[T]) GroupBy[K comparable](key func(T) K) []Group[K, T]
+    GroupBy consumes s into caller-owned groups ordered by each key's first
+    encounter. Values within a group preserve source order. Empty input returns
+    nil. It uses expected O(n+g) result and indexing memory, expected O(n) time,
+    and requires finite input.
+
+func (s Stream[T]) Inspect(fn func(T)) Stream[T]
+    Inspect returns a lazy, infinite-safe Stream that invokes fn before offering
+    each consumed value downstream. It takes O(n) time plus callback work,
+    uses O(1) traversal state, and propagates downstream false.
+
+func (s Stream[T]) Last() optional.Optional[T]
+    Last consumes s and returns its last value, or None when s is empty. It uses
+    O(1) state and requires finite input.
+
+func (s Stream[T]) Map[R any](fn func(T) R) Stream[R]
+    Map returns a lazy, infinite-safe Stream that applies fn exactly once to
+    each consumed value while preserving encounter order. It takes O(n) time
+    plus callback work, uses O(1) traversal state, and propagates downstream
+    false.
+
+func (s Stream[T]) MaxBy[K cmp.Ordered](key func(T) K) optional.Optional[T]
+    MaxBy consumes s and returns the element with the greatest ordered key,
+    invoking key exactly once per element and retaining the first element on
+    ties. It uses O(1) state, takes O(n) time plus key work, and requires finite
+    input.
+
+func (s Stream[T]) MaxFunc(compare func(T, T) int) optional.Optional[T]
+    MaxFunc consumes s and returns its greatest value according to compare,
+    retaining the first value on ties. It returns None for empty input.
+    It performs O(n) comparisons, uses O(1) state, and requires finite input.
+
+func (s Stream[T]) MinBy[K cmp.Ordered](key func(T) K) optional.Optional[T]
+    MinBy consumes s and returns the element with the least ordered key,
+    invoking key exactly once per element and retaining the first element on
+    ties. It uses O(1) state, takes O(n) time plus key work, and requires finite
+    input.
+
+func (s Stream[T]) MinFunc(compare func(T, T) int) optional.Optional[T]
+    MinFunc consumes s and returns its least value according to compare,
+    retaining the first value on ties. It returns None for empty input.
+    It performs O(n) comparisons, uses O(1) state, and requires finite input.
+
+func (s Stream[T]) None(predicate func(T) bool) bool
+    None reports whether predicate accepts no value and stops at the first
+    match. It returns true for empty input. It uses O(1) state and is
+    conditionally safe for infinite input.
+
+func (s Stream[T]) Reduce[A any](initial A, fn func(A, T) A) A
+    Reduce performs a left fold beginning with a shallow copy of initial. Empty
+    input returns initial without invoking fn. Reduce uses O(1) accumulator
+    state and requires finite input.
+
+func (s Stream[T]) ReduceFirst(fn func(T, T) T) optional.Optional[T]
+    ReduceFirst performs a left fold beginning with the first value. It returns
+    None for empty input and does not invoke fn for a singleton. ReduceFirst
+    uses O(1) state and requires finite input.
+
+func (s Stream[T]) Reverse() Stream[T]
+    Reverse returns a construction-lazy finite-only barrier that recollects s
+    on every traversal and emits exact reverse encounter order. It takes O(n)
+    time and memory, applies downstream false only after the barrier, and cannot
+    produce output for infinite input.
+
+func (s Stream[T]) Scan[A any](initial A, fn func(A, T) A) Stream[A]
+    Scan returns a lazy Stream of successive accumulator values. It does
+    not emit initial. Each traversal starts with a shallow copy of initial.
+    Scan is infinite-safe, preserves positions, and uses O(1) state apart from
+    the accumulator.
+
+func (s Stream[T]) Seq() iter.Seq[T]
+    Seq returns a non-nil iterator sequence. Calling Seq does not traverse the
+    source, and invoking the returned sequence inherits the source's replay
+    behavior. Iteration is ordered, sequential, and propagates downstream false
+    to a conforming source in O(n) time with O(1) Shuttle state.
+
+func (s Stream[T]) Skip(n int) Stream[T]
+    Skip returns a lazy Stream that discards the first n values. It panics
+    immediately for negative n. It is infinite-safe, preserves suffix order,
+    takes O(n) time for a complete finite traversal, and uses O(1) state.
+
+func (s Stream[T]) SkipWhile(predicate func(T) bool) Stream[T]
+    SkipWhile returns the suffix beginning with the first value rejected by
+    predicate. After that rejection it never invokes predicate again. It is
+    infinite-safe, preserves suffix order, and uses O(1) state.
+
+func (s Stream[T]) SortedFunc(compare func(T, T) int) Stream[T]
+    SortedFunc returns a construction-lazy finite-only barrier that recollects
+    and stably sorts s on every traversal without modifying source-owned
+    storage. It takes O(n log n) comparisons, retains O(n) values, propagates
+    downstream false only after the barrier, and cannot produce output for
+    infinite input.
+
+func (s Stream[T]) Take(n int) Stream[T]
+    Take returns a lazy Stream of at most the first n values. It panics
+    immediately for negative n. Take(0) never invokes upstream, and Take(n)
+    never probes n+1. It is infinite-safe, preserves prefix order, and uses O(1)
+    state.
+
+func (s Stream[T]) TakeWhile(predicate func(T) bool) Stream[T]
+    TakeWhile returns the longest prefix accepted by predicate. It consumes and
+    tests the first rejected value, then stops upstream. It is infinite-safe,
+    preserves prefix order, and uses O(1) state.
+
+func (s Stream[T]) ToMap[K comparable, V any](key func(T) K, value func(T) V) map[K]V
+    ToMap consumes s into a new non-nil map. It invokes key then value once
+    per element, and later duplicate keys replace earlier values. It returns a
+    non-nil map, uses expected O(u) result memory and O(n) time, and requires
+    finite input.
+
+func (s Stream[T]) ToMapWith[K comparable, V any](key func(T) K, value func(T) V, merge func(V, V) V) map[K]V
+    ToMapWith consumes s into a new non-nil map. For duplicate keys it invokes
+    merge(existing, incoming); first occurrences do not invoke merge. It returns
+    a non-nil map, uses expected O(u) result memory and O(n) time plus merge
+    work, and requires finite input.

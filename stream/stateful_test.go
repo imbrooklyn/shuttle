@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"testing"
 
@@ -74,6 +75,17 @@ func TestChunkBoundariesAndOwnership(t *testing.T) {
 	if chunkInput[0] != 1 {
 		t.Fatalf("mutating a chunk changed source storage: %v", chunkInput)
 	}
+
+	if got := stream.Chunk(stream.Empty[int](), math.MaxInt).Collect(); got != nil {
+		t.Fatalf("empty huge Chunk = %v, want nil", got)
+	}
+	hugePartial := stream.Chunk(stream.Of(1, 2), math.MaxInt).Collect()
+	if len(hugePartial) != 1 || !slices.Equal(hugePartial[0], []int{1, 2}) {
+		t.Fatalf("short huge Chunk = %v, want [[1 2]]", hugePartial)
+	}
+	if cap(hugePartial[0]) != len(hugePartial[0]) {
+		t.Fatalf("short huge Chunk cap = %d, len = %d", cap(hugePartial[0]), len(hugePartial[0]))
+	}
 }
 
 func TestWindowAndWindowStep(t *testing.T) {
@@ -132,6 +144,13 @@ func TestWindowAndWindowStep(t *testing.T) {
 	requirePanics(t, "WindowStep size zero", func() { stream.WindowStep(stream.Empty[int](), 0, 1) })
 	requirePanics(t, "WindowStep step zero", func() { stream.WindowStep(stream.Empty[int](), 1, 0) })
 	requirePanics(t, "WindowStep step negative", func() { stream.WindowStep(stream.Empty[int](), 1, -1) })
+
+	if got := stream.Window(stream.Empty[int](), math.MaxInt).Collect(); got != nil {
+		t.Fatalf("empty huge Window = %v, want nil", got)
+	}
+	if got := stream.WindowStep(stream.Of(1, 2), math.MaxInt, math.MaxInt).Collect(); got != nil {
+		t.Fatalf("short huge WindowStep = %v, want nil", got)
+	}
 }
 
 type sortableRecord struct {

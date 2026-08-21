@@ -15,7 +15,7 @@ For complexity statements:
 
 - `n` is the number of upstream elements consumed;
 - `m` is the number of elements available from a second input when an operation has two inputs;
-- `q` is the total number of inner elements consumed by `FlatMap`;
+- `q` is the total number of inner elements consumed by `FlatMap` or `FlatMapSlice`;
 - `k` is a requested count, chunk size, or window size as applicable;
 - `u` is the number of distinct keys encountered;
 - `g` is the number of groups;
@@ -460,6 +460,7 @@ func (s Stream[T]) Seq() iter.Seq[T]
 
 func (s Stream[T]) Map[R any](fn func(T) R) Stream[R]
 func (s Stream[T]) FlatMap[R any](fn func(T) Stream[R]) Stream[R]
+func (s Stream[T]) FlatMapSlice[R any](fn func(T) []R) Stream[R]
 func (s Stream[T]) Filter(predicate func(T) bool) Stream[T]
 func (s Stream[T]) FilterMap[R any](fn func(T) optional.Optional[R]) Stream[R]
 func (s Stream[T]) Inspect(fn func(T)) Stream[T]
@@ -699,6 +700,20 @@ For each consumed outer element, invokes `fn` exactly once and completely traver
 
 Downstream false must stop the active inner Stream and then the outer Stream. An infinite inner Stream prevents later outer elements from being reached, but downstream can still terminate it. Time is `O(n + q)`, only one inner traversal is active, and Shuttle state is `O(1)` excluding source/inner state. Classification: IS for streaming and bounded Shuttle state.
 
+#### `FlatMapSlice`
+
+```go
+func (s Stream[T]) FlatMapSlice[R any](fn func(T) []R) Stream[R]
+```
+
+For each consumed outer element, invokes `fn` exactly once and ranges over the returned slice completely before requesting the next outer element. Nil and empty slices contribute no values. Output order is outer encounter order followed by each slice's element order.
+
+Construction does not invoke `fn`. Downstream false stops the active slice loop and returns false to a conforming outer source without requesting another outer element. Callback, source, and downstream panics propagate unchanged. A nil callback follows the common reached-path rule: it is harmless for an empty source and panics if an outer element reaches it.
+
+The implementation makes no defensive copy of the returned slice storage or its elements and does not cache them. Ordinary Go value passing and shallow aliasing apply while the inner slice is active, and every traversal invokes `fn` again for every reached outer element. The derived Stream therefore preserves the reusable or single-use behavior of its source.
+
+Time is `O(n + q)` plus callback work, traversal state is `O(1)` outside caller-owned data, and no inner Stream descriptor is constructed. Classification: IS for streaming and bounded Shuttle state.
+
 #### `Filter`
 
 ```go
@@ -841,6 +856,8 @@ Each emitted slice must have a newly allocated backing array that is distinct fr
 
 The operator consumes no values beyond the end of the chunk currently being emitted. It is IS and order-preserving. Total copying is `O(n)`, traversal working memory is `O(size)`, and output allocates once per emitted chunk.
 
+The working buffer is allocated only after the source supplies its first value. Its initial capacity must be bounded independently of an arbitrarily large `size`; it may grow normally as input proves demand. Empty input and short input with a very large `size` must not allocate storage proportional to `size`. The internal bound and growth policy are not public compatibility contracts. Callers must still validate sizes derived from external requests.
+
 Example:
 
 ```text
@@ -880,6 +897,8 @@ for `start = 0, step, 2*step, ...` while `start+size <= n`. A partial final wind
 Every emitted window must have its own backing array, distinct from every other output and internal storage, with `cap(window) == len(window)`. The caller may retain and mutate it safely. The operator must not consume gap or next-window values until downstream accepts the current window and requests progress.
 
 It is IS and preserves order within and among window starts. Working memory is `O(size)`. Time is `O(n + w*size)` because every emitted owned window is copied, and output allocates once per window.
+
+The working buffer is allocated only after the source supplies a value that belongs to a prospective window. Its initial capacity must be bounded independently of an arbitrarily large `size`; it grows normally when enough input is consumed. Empty or short input with a very large `size` must not allocate storage proportional to `size`. The internal bound and growth policy are not compatibility contracts, and callers remain responsible for validating externally supplied sizes.
 
 #### `SortedFunc`
 
@@ -1114,6 +1133,7 @@ The matrix summarizes normative properties. “SC” means the operation propaga
 | --- | --- | --- | --- | :---: | --- | :---: |
 | `Map` | incremental | `O(n)` + callback | `O(1)` | yes | preserved | IS |
 | `FlatMap` | incremental | `O(n+q)` + callback | `O(1)` Shuttle state | yes | outer then inner | IS |
+| `FlatMapSlice` | incremental | `O(n+q)` + callback | `O(1)` Shuttle state | yes | outer then slice | IS |
 | `Filter` | incremental | `O(n)` + predicate | `O(1)` | yes | preserved subset | IS |
 | `FilterMap` | incremental | `O(n)` + callback | `O(1)` | yes | preserved subset | IS |
 | `Inspect` | incremental | `O(n)` + callback | `O(1)` | yes | preserved | IS |
@@ -1155,6 +1175,7 @@ An implementation must include instrumented tests proving all of the following:
 - `Take(n)` does not request element `n+1`;
 - `TakeWhile` consumes exactly through its first failing element;
 - `FlatMap` stops both the active inner traversal and the outer traversal;
+- `FlatMapSlice` stops its active slice loop and returns false to the outer traversal;
 - `Concat` never starts a later source after early termination;
 - Zip does not invoke the right source when the left source is empty and consumes exactly one unmatched left value when the right source ends first;
 - Zip stops its right pull iterator and unwinds its left push iterator when either side ends, downstream stops, or a panic unwinds;
@@ -1608,6 +1629,10 @@ Examples must demonstrate `Not`, `And`, and `Or`, projection with `On`, typed-ni
 
 Examples must demonstrate ascending and descending ordered keys through fluent `ThenBy` methods, a non-ordered key projected through `On` and fluent `ThenOn`, custom descending projection, the distinction between per-level descending and whole-order `Reverse`, and one `Func[T]` passed directly to both `slices.SortStableFunc` and Stream comparison operations.
 
+### 7.8 Nested cross-package pipeline
+
+An executable example must flatten at least four slice-backed hierarchy levels with `FlatMapSlice`, map leaf values, reuse a predicate built with `On` and `And`, sort with `ByDescending` and `ThenBy`, group with `GroupBy`, extract a `MaxBy` result through Optional `Map` and `OrElse`, and batch with `Chunk`. The output must be deterministic and tested. The example must identify incremental lazy operators, finite-only barriers, and full-consumption terminals, and must depend only on Shuttle and the standard library.
+
 ## 8. Performance acceptance criteria
 
 The implementation must include benchmarks against equivalent direct loops for sizes 10, 1K, and 1M where the scenario is meaningful:
@@ -1615,6 +1640,7 @@ The implementation must include benchmarks against equivalent direct loops for s
 ```text
 Filter + Map + Take
 FlatMap
+FlatMapSlice, compared with both a direct nested loop and FlatMap + FromSlice
 DistinctBy
 Zip
 Chunk
@@ -1667,10 +1693,10 @@ Comparator: Ordered, By, ByDescending, On, OnDescending, Reverse, Then,
             ThenBy, ThenByDescending, ThenOn, ThenOnDescending
 Predicate: Not, And, Or, Always, Equal, EqualFunc, On
 Optional: Map, FlatMap, Filter, Inspect
-Stream:   Map, Filter, Inspect, Take, Skip, TakeWhile, SkipWhile
+Stream:   Map, FlatMapSlice, Filter, Inspect, Take, Skip, TakeWhile, SkipWhile
 ```
 
-Comparator and Predicate allocation gates must preconstruct descriptors and require zero allocations per evaluation when callbacks do not allocate. Comparator construction closures and a non-empty `Then` snapshot may allocate before evaluation. `IsNil` and `IsNotNil` must also have representative allocation coverage for static nilable inputs, while documentation and benchmarks retain their interface-boxing and reflection cost boundary. Zero total allocations are a target where escape analysis permits for Optional and Stream, but their normative requirement is zero **per-element** allocation caused by the listed operators. `Ptr`, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
+Comparator and Predicate allocation gates must preconstruct descriptors and require zero allocations per evaluation when callbacks do not allocate. Comparator construction closures and a non-empty `Then` snapshot may allocate before evaluation. `IsNil` and `IsNotNil` must also have representative allocation coverage for static nilable inputs, while documentation and benchmarks retain their interface-boxing and reflection cost boundary. Zero total allocations are a target where escape analysis permits for Optional and Stream, but their normative requirement is zero **per-element** allocation caused by the listed operators. For `FlatMapSlice`, when `fn` returns existing storage and downstream collection is excluded, allocation must not grow with either the outer element count or the total inner element count. `Ptr`, callback-created slices, JSON, collection, maps, sorting buffers, chunk slices, and window slices are intentionally allocating operations.
 
 ## 9. Test acceptance criteria
 
@@ -1746,8 +1772,11 @@ empty; singleton; large; reusable; single-use; infinite
 Map identity; Filter always true and false
 all Take, Skip, TakeWhile, and SkipWhile boundaries
 FlatMap with empty and infinite inner streams
+FlatMapSlice construction laziness; nil, empty, singleton, and nested slices
+FlatMapSlice callback counts, aliasing, encounter order, early termination, panic identity, source replay behavior, method values, and method expressions
 stable DistinctBy order and per-traversal state
 Chunk, Window, and every size/step relationship
+Chunk and WindowStep with empty or short input and a size near `math.MaxInt`
 slice retention and mutation after subsequent output
 stable SortedFunc ties and Reverse
 Zip left shorter, right shorter, and downstream early stop
@@ -1786,10 +1815,11 @@ Before `v1.0.0`, and before every later v1 release, all of the following must be
 6. A pinned Go-1.27-capable `staticcheck` passes. A prerelease pin is permitted only while no stable Staticcheck release supports Go 1.27 and must be reconsidered before each release.
 7. `govulncheck ./...` passes for the release candidate.
 8. Linux amd64/arm64, macOS amd64/arm64, and Windows amd64/arm64 compile; native tests run wherever reliable runners exist, with native versus cross-compiled coverage recorded.
-9. Comparator and Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed on a pinned runner.
-10. An API diff against the previous release has been classified under Semantic Versioning.
+9. Comparator and Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed under `BENCHMARKS.md` on a pinned runner; raw samples and the pinned-`benchstat` report are retained as artifacts.
+10. The Go-1.27.0-generated public API and GoDoc snapshot matches the committed baseline, and a retained diff against the previous release has been classified under Semantic Versioning.
 11. The published Go 1.27 specification and release notes have been checked for generic-method or iterator changes.
 12. `DESIGN.md`, this document, GoDoc, tests, and implementation agree on every public behavior.
+13. Every third-party GitHub Action is pinned to a reviewed full commit SHA with a release-version comment; workflow permissions remain limited to `contents: read`, and ordinary test jobs receive no write permission or secret.
 
 ## 11. Compatibility rules for implementers
 
@@ -1826,6 +1856,7 @@ Parallel, Async, Observable
 Collector or collectors framework
 FromFile, FromReader, FromHTTP, FromChannel
 MapToInt, MapToString
+MapMulti
 Peek, Limit, Select, Where, ToSlice, Fold
 ContainsFunc (use Any)
 Sum

@@ -17,6 +17,8 @@ var (
 
 var benchmarkSizes = []int{10, 1_000, 1_000_000}
 
+var benchmarkBufferSizes = []int{8, 16, 64, 256, 257, 512, 4_096}
+
 func benchmarkInput(size int) []int {
 	values := make([]int, size)
 	for index := range values {
@@ -83,6 +85,57 @@ func BenchmarkFlatMap(b *testing.B) {
 			for range b.N {
 				benchmarkIntSlice = pipeline.Collect()
 			}
+		})
+	}
+}
+
+func benchmarkNestedInput(outerCount, innerCount int) [][]int {
+	inner := benchmarkInput(innerCount)
+	outer := make([][]int, outerCount)
+	for index := range outer {
+		outer[index] = inner
+	}
+	return outer
+}
+
+func benchmarkSliceFlatten(b *testing.B, input [][]int) {
+	b.Run("Direct", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			var result []int
+			for _, values := range input {
+				result = append(result, values...)
+			}
+			benchmarkIntSlice = result
+		}
+	})
+	b.Run("FlatMapFromSlice", func(b *testing.B) {
+		pipeline := stream.FromSlice(input).FlatMap(func(values []int) stream.Stream[int] {
+			return stream.FromSlice(values)
+		})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			benchmarkIntSlice = pipeline.Collect()
+		}
+	})
+	b.Run("FlatMapSlice", func(b *testing.B) {
+		pipeline := stream.FromSlice(input).FlatMapSlice(func(values []int) []int { return values })
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			benchmarkIntSlice = pipeline.Collect()
+		}
+	})
+}
+
+func BenchmarkFlatMapSlice(b *testing.B) {
+	for _, size := range benchmarkSizes {
+		b.Run(fmt.Sprintf("ManySmall/%d", size), func(b *testing.B) {
+			benchmarkSliceFlatten(b, benchmarkNestedInput(size, 2))
+		})
+		b.Run(fmt.Sprintf("OneLarge/%d", size), func(b *testing.B) {
+			benchmarkSliceFlatten(b, benchmarkNestedInput(1, size))
 		})
 	}
 }
@@ -196,6 +249,47 @@ func BenchmarkWindow(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkStatefulBufferSizing(b *testing.B) {
+	for _, size := range benchmarkBufferSizes {
+		input := benchmarkInput(size * 4)
+		b.Run(fmt.Sprintf("Chunk/%d", size), func(b *testing.B) {
+			pipeline := stream.Chunk(stream.FromSlice(input), size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				benchmarkIntSlices = pipeline.Collect()
+			}
+		})
+		b.Run(fmt.Sprintf("WindowStep/%d", size), func(b *testing.B) {
+			pipeline := stream.WindowStep(stream.FromSlice(input), size, size)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				benchmarkIntSlices = pipeline.Collect()
+			}
+		})
+	}
+
+	short := stream.Of(1, 2, 3, 4)
+	b.Run("Chunk/HugeSizeShortInput", func(b *testing.B) {
+		pipeline := stream.Chunk(short, int(^uint(0)>>1))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			benchmarkIntSlices = pipeline.Collect()
+		}
+	})
+	b.Run("WindowStep/HugeSizeShortInput", func(b *testing.B) {
+		maxInt := int(^uint(0) >> 1)
+		pipeline := stream.WindowStep(short, maxInt, maxInt)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			benchmarkIntSlices = pipeline.Collect()
+		}
+	})
 }
 
 func BenchmarkSortedFunc(b *testing.B) {
