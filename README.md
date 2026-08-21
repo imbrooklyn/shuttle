@@ -8,8 +8,8 @@ scope is intentionally narrow: composable `comparator.Func[T]` and
 sequential `Stream[T]`.
 
 Shuttle requires Go 1.27 or newer because its fluent type-changing operations
-use generic methods. Development before the stable Go 1.27 release is validated
-with the pinned `go1.27rc3` toolchain.
+use generic methods. The initial stable development and release-validation
+baseline is Go 1.27.0.
 
 ## Packages
 
@@ -201,23 +201,27 @@ the source.
 
 ## Development
 
-During the Go 1.27 release-candidate phase, use the exact baseline toolchain:
+Use the pinned stable baseline toolchain for development and release validation:
 
 ```bash
-go1.27rc3 test ./...
-go1.27rc3 test -race ./...
-go1.27rc3 vet ./...
+go version
+go test ./...
+go test -race ./...
+go vet ./...
 ```
+
+For the initial stable baseline, `go version` must report Go 1.27.0. A future
+Go 1.27 patch upgrade must update the documented and CI toolchain pins together.
 
 All four packages include fuzz or property coverage and allocation-aware
 benchmarks. CI distinguishes native tests and race tests from cross-compilation.
 
 ## Release strategy
 
-Shuttle remains on `v0.x` while Go 1.27 is an RC. After Go 1.27 stable ships,
-the project will pin a stable patch toolchain, rerun compiler probes and all
-release gates, review RC-to-stable language changes, and publish `v1.0.0` only
-if no breaking correction is required.
+Go 1.27.0 is the stable v1 toolchain baseline. Shuttle remains on `v0.x` until
+the stable-toolchain compiler probes, release gates, and final API review are
+complete. The project will publish `v1.0.0` only if no breaking correction is
+required.
 
 ## License
 

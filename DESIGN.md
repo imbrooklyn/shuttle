@@ -58,30 +58,29 @@ Errorful transformations can use an element type chosen by the caller, including
 
 Shuttle uses Go 1.27 generic methods in its first public implementation. It does not publish package-level fallbacks merely for older compilers, use build tags for a pre-1.27 API, or constrain the design to syntax accepted by Go 1.26. Package functions required by receiver-element constraints are part of the native Go 1.27 design. The separate package functions for structurally transformed results reflect a confirmed Go 1.27 compiler limitation discussed in Section 13, not pre-1.27 compatibility shims.
 
-The pre-stable development baseline is the fixed `go1.27rc3` toolchain. The module's `go` directive is `1.27`, and CI must invoke the pinned RC rather than an unpinned `tip` build. Generic method declarations, inference, method expressions, receiver rules, and iterator behavior must be checked with that compiler, not inferred only from proposals.
+The stable development and release-validation baseline is fixed Go 1.27.0. The module's `go` directive is `1.27`, and CI must invoke the pinned stable patch rather than an RC or unpinned `tip` build. Generic method declarations, inference, method expressions, receiver rules, and iterator behavior must be checked with that compiler, not inferred only from proposals.
 
-The expected local setup and primary RC commands are:
+The primary stable-toolchain commands are:
 
 ```bash
-go install golang.org/dl/go1.27rc3@latest
-go1.27rc3 download
-go1.27rc3 test ./...
-go1.27rc3 test -race ./...
-go1.27rc3 vet ./...
+go version
+go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-Until Go 1.27 stable is released, Shuttle remains at `v0.x`. RC-era releases may contain the complete implementation and may change incompatibly after review. They must not be tagged `v1.0.0`.
+For the initial stable baseline, `go version` must report Go 1.27.0. A future Go 1.27 patch upgrade must be intentional and update local guidance, CI, and recorded release validation together.
 
-After Go 1.27 stable is released, the release owner must:
+Go 1.27 stable has been released. Shuttle remains at `v0.x` until v1 qualification is complete. Pre-v1 releases may contain the complete implementation and may change incompatibly after review, but they must not be tagged `v1.0.0`. Before the v1 tag, the release owner must:
 
-1. replace the RC toolchain in CI with a pinned Go 1.27 stable patch release;
+1. replace any remaining RC toolchain pin in CI with the pinned Go 1.27 stable patch;
 2. run the complete test, race, fuzz, vet, static-analysis, vulnerability, and benchmark suites;
 3. rerun compiler probes for generic methods, inference, receiver constraints, method values, and iterator behavior;
-4. review the final Go 1.27 specification and release notes for RC-to-stable changes;
+4. review the published Go 1.27 specification and release notes for changes from the RC baseline;
 5. perform a final source and behavioral compatibility review against this specification; and
 6. tag `v1.0.0` only if no breaking correction is needed.
 
-An RC compiler bug must be investigated against the current official specification and issue tracker. Shuttle must not permanently encode an RC-only workaround into its public API.
+A compiler limitation first observed during the RC period must be confirmed against the stable compiler, current official specification, and issue tracker. Shuttle must not permanently encode an RC-only workaround into its public API.
 
 ## 4. Repository and dependency structure
 
@@ -380,7 +379,7 @@ func (s Stream[T]) GroupBy[K comparable](key func(T) K) []Group[K, T]
 
 It does not let a method strengthen the receiver's existing `T any` to `T comparable` or `T cmp.Ordered`. Constraining `Stream[T]` itself would reject valid streams of slices, maps, and functions merely to support a few conveniences.
 
-The Go 1.27 RC3 type checker also rejects a method when its result recursively instantiates the receiver generic type with a structural expansion of the receiver parameter. For example, these declarations produce an `instantiation cycle` in `go1.27rc3`:
+The stable Go 1.27.0 type checker rejects a method when its result recursively instantiates the receiver generic type with a structural expansion of the receiver parameter. For example, these declarations produce an `instantiation cycle` in Go 1.27.0:
 
 ```go
 func (s Stream[T]) Enumerate() Stream[Pair[int, T]]
@@ -390,7 +389,7 @@ func (s Stream[T]) Zip[U any](other Stream[U]) Stream[Pair[T, U]]
 
 The equivalent generic package functions compile. This behavior is tracked by Go issue [#80172](https://go.dev/issue/80172) as an overly conservative method monomorphization check and is targeted after Go 1.27. Shuttle cannot declare an API that its minimum supported stable toolchain rejects, and it must not hide the problem behind `any`, reflection, or a compiler-specific type-inference trick.
 
-This is explicitly rechecked at the RC-to-stable gate. If the final Go 1.27 compiler accepts the direct method declarations, maintainers must revisit these package-function choices before v1 freeze and update both specifications; they must not add duplicate method aliases silently. If stable retains the rejection, the package functions are the supported Go 1.27 API rather than an RC-only workaround.
+This was rechecked with the stable Go 1.27.0 compiler, which retains the rejection. The package functions are therefore the supported Go 1.27 API rather than an RC-only workaround. If a future minimum supported Go version accepts the direct method declarations, any method-versus-function change requires a pre-release API review and synchronized specification updates; maintainers must not add duplicate method aliases silently.
 
 The design therefore separates operations as follows:
 
@@ -548,7 +547,7 @@ Windows: amd64, arm64 where a reliable native runner is available
 
 At minimum, tests run natively on Linux amd64/arm64, macOS arm64, and Windows amd64; compilation is checked for every listed supported pair. Race tests run on every required native runner supported by Go's race detector. A platform without dependable public arm64 runners is not silently claimed as runtime-tested; the release record distinguishes native tests from cross-compilation.
 
-`staticcheck` is required for v1 once its pinned release parses and analyzes Go 1.27 generic methods. During the RC window, tool lag may be a documented non-blocking job, but compiler, test, race, and vet jobs remain blocking. `govulncheck` is required on the default branch, on a schedule, and for release; network availability may make it retryable rather than a per-commit blocking job. Benchmark timing regression is review-gated on controlled hardware, not a noisy universal pass/fail threshold.
+`staticcheck` is required for v1, and its pinned release must parse and analyze stable Go 1.27 generic methods. Until Staticcheck publishes a stable Go-1.27-capable release, a pinned release candidate that explicitly supports Go 1.27 is permitted and remains blocking. `govulncheck` is required on the default branch, on a schedule, and for release; network availability may make it retryable rather than a per-commit blocking job. Benchmark timing regression is review-gated on controlled hardware, not a noisy universal pass/fail threshold.
 
 ## 19. Compatibility policy
 
@@ -632,7 +631,7 @@ func IsNotNil[T any](value T) bool
 
 `AllOf`, `AnyOf`, `Negate`, `Matches`, `Test`, `Apply`, `Compose`, `Contramap`, `Equals`, and similar aliases are intentionally absent. Each supplied name represents one operation with one canonical spelling.
 
-Go 1.27 RC3 compiler probes confirm that `Func[T]` is assignable to an unnamed `func(T) bool`, ordinary unnamed function values are accepted where `Func[T]` is required, constructors infer their type arguments, generic nil predicates support assignment and argument-context reverse inference, and `Func` methods support method values and method expressions. The candidate inventory therefore requires no compatibility workaround.
+Stable Go 1.27.0 compiler probes confirm that `Func[T]` is assignable to an unnamed `func(T) bool`, ordinary unnamed function values are accepted where `Func[T]` is required, constructors infer their type arguments, generic nil predicates support assignment and argument-context reverse inference, and `Func` methods support method values and method expressions. The candidate inventory therefore requires no compatibility workaround.
 
 ### 21.2 Composition semantics
 
@@ -710,7 +709,7 @@ func (c Func[T]) ThenOnDescending[K any](project func(T) K, compare func(K, K) i
 
 The projected-level API is a deliberate matrix: ordered keys use `By` and `ThenBy`, custom orderings use `On` and `ThenOn`, and each has one `Descending` counterpart that reverses only that level. The unsuffixed form is canonical for the supplied or natural direction. `Asc`, `Desc`, `OnAscending`, `ThenOnAscending`, `ByFunc`, `ThenByFunc`, `Compare`, `Comparing`, `ThenComparing`, `Chain`, `Compose`, `Natural`, and `Default` remain absent.
 
-Go 1.27 RC3 compiler probes confirm generic inference for every projected constructor and method, including chains whose levels use different key types; explicit generic-method instantiation; target-type inference for generic method values and method expressions; argument-context inference for generic comparison functions; named-function assignability to unnamed callback parameters, including custom comparator types declared by another package; and direct `slices`/Stream interoperability. `Ordered` has no value argument from which to infer `T`, so callers instantiate it explicitly, such as `Ordered[int]()`. A `time.Time` key does not satisfy `cmp.Ordered`; it is supported through `On(project, time.Time.Compare)` or as a later fluent level through `ThenOn(project, time.Time.Compare)`.
+Stable Go 1.27.0 compiler probes confirm generic inference for every projected constructor and method, including chains whose levels use different key types; explicit generic-method instantiation; target-type inference for generic method values and method expressions; argument-context inference for generic comparison functions; named-function assignability to unnamed callback parameters, including custom comparator types declared by another package; and direct `slices`/Stream interoperability. `Ordered` has no value argument from which to infer `T`, so callers instantiate it explicitly, such as `Ordered[int]()`. A `time.Time` key does not satisfy `cmp.Ordered`; it is supported through `On(project, time.Time.Compare)` or as a later fluent level through `ThenOn(project, time.Time.Compare)`.
 
 ### 22.2 Sign, nil, panic, and ordering laws
 

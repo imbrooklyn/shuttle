@@ -5,7 +5,7 @@
 Status: normative implementation specification  
 Module: `github.com/imbrooklyn/shuttle`  
 Minimum language version: Go 1.27  
-RC validation baseline: `go1.27rc3`
+Stable validation baseline: Go 1.27.0
 
 This document defines the complete Shuttle v1 public API and its observable behavior. The key words **must**, **must not**, **should**, and **may** are normative. Public identifiers not listed here must not be added to v1 without an API review and a specification change.
 
@@ -499,9 +499,9 @@ func (s Stream[T]) GroupBy[K comparable](key func(T) K) []Group[K, T]
 
 No `Stream2`, mutable builder, collector interface, `Sum`, error-state method, or concurrency method is public in v1.
 
-`Enumerate`, `Zip`, `Chunk`, `Window`, and `WindowStep` are package functions under the validated Go 1.27 toolchain. A method returning `Stream[Pair[int,T]]`, `Stream[Pair[T,U]]`, or `Stream[[]T]` recursively instantiates the receiver method set with a structurally expanded `T` and is rejected by `go1.27rc3` as an `instantiation cycle`. Go issue [#80172](https://go.dev/issue/80172) tracks this as an overly conservative compiler check targeted after Go 1.27. The equivalent package functions compile. They must not be replaced with reflection, `any`, or type-inference tricks.
+`Enumerate`, `Zip`, `Chunk`, `Window`, and `WindowStep` are package functions under the validated Go 1.27 toolchain. A method returning `Stream[Pair[int,T]]`, `Stream[Pair[T,U]]`, or `Stream[[]T]` recursively instantiates the receiver method set with a structurally expanded `T` and is rejected by the stable Go 1.27.0 compiler as an `instantiation cycle`. Go issue [#80172](https://go.dev/issue/80172) tracks this as an overly conservative compiler check targeted after Go 1.27. The equivalent package functions compile. They must not be replaced with reflection, `any`, or type-inference tricks.
 
-The stable-migration gate must retry the direct declarations. If final Go 1.27 accepts them, method versus function shape requires a pre-v1 API review and synchronized specification change; no aliases are added automatically. If stable retains the rejection, the declarations above remain the authoritative v1 API required to support Go 1.27.
+The direct declarations were retried with stable Go 1.27.0, which retains the rejection. The declarations above therefore remain the authoritative v1 API required to support Go 1.27. If a future minimum supported Go version accepts the methods, method-versus-function shape requires a pre-release API review and synchronized specification change; no aliases are added automatically.
 
 ### 4.2 Core types
 
@@ -1779,16 +1779,16 @@ Iterator cleanup tests must use explicit completion signals or source defers. Ti
 Before `v1.0.0`, and before every later v1 release, all of the following must be true:
 
 1. The repository builds with its declared Go 1.27 minimum.
-2. During the RC phase the exact `go1.27rc3` commands pass; after stable, a pinned Go 1.27 stable patch replaces RC3.
+2. Validation uses the pinned stable Go 1.27.0 toolchain; any patch upgrade updates CI and documentation together.
 3. `go test ./...`, `go test -race ./...`, and `go vet ./...` pass on the required native CI matrix.
 4. All exported identifiers have complete GoDoc and every code example compiles.
 5. Bounded fuzz runs and all committed fuzz seeds pass.
-6. A pinned Go-1.27-capable `staticcheck` passes. RC tool lag must be explicitly recorded and cannot remain at v1 freeze.
+6. A pinned Go-1.27-capable `staticcheck` passes. A prerelease pin is permitted only while no stable Staticcheck release supports Go 1.27 and must be reconsidered before each release.
 7. `govulncheck ./...` passes for the release candidate.
 8. Linux amd64/arm64, macOS amd64/arm64, and Windows amd64/arm64 compile; native tests run wherever reliable runners exist, with native versus cross-compiled coverage recorded.
 9. Comparator and Predicate allocation targets and benchmarks, plus the Optional/Stream 10/1K/1M benchmark comparison, have been reviewed on a pinned runner.
 10. An API diff against the previous release has been classified under Semantic Versioning.
-11. The final Go 1.27 specification and release notes have been checked for generic-method or iterator changes.
+11. The published Go 1.27 specification and release notes have been checked for generic-method or iterator changes.
 12. `DESIGN.md`, this document, GoDoc, tests, and implementation agree on every public behavior.
 
 ## 11. Compatibility rules for implementers
