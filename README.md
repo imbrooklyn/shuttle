@@ -11,6 +11,10 @@ Shuttle requires Go 1.27 or newer because its fluent type-changing operations
 use generic methods. The initial stable development and release-validation
 baseline is Go 1.27.0.
 
+> [!IMPORTANT]
+> Shuttle has not published a stable v1 release. Pre-v1 versions are intended
+> for evaluation and may change incompatibly after review.
+
 ## Packages
 
 - [`comparator`](https://pkg.go.dev/github.com/imbrooklyn/shuttle/comparator)
@@ -242,6 +246,9 @@ benchmarks. CI distinguishes native tests and race tests from cross-compilation.
 Release benchmark comparison and regression classification are documented in
 [BENCHMARKS.md](BENCHMARKS.md). The reviewed public API and GoDoc snapshot,
 including its regeneration command, is documented in [api/README.md](api/README.md).
+Release owners must follow [RELEASING.md](RELEASING.md). User-visible changes
+are recorded in [CHANGELOG.md](CHANGELOG.md), and private vulnerability reports
+follow [SECURITY.md](SECURITY.md).
 
 ## Release strategy
 

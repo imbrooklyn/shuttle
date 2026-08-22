@@ -6,6 +6,12 @@ same job with the pinned Go toolchain, ten samples, a 500 ms benchmark time,
 `-p=1` package serialization, and `-benchmem`. It retains both raw outputs and
 the pinned `benchstat` report.
 
+A release owner must manually dispatch the workflow against the exact candidate
+ref and review its report before creating a public tag. The tag-triggered run is
+a post-publication audit of the same commit; it does not replace the pre-tag
+qualification. Candidate and baseline must resolve to different commits, and
+the workflow records both SHAs in its summary.
+
 ## Blocking regressions
 
 A release is blocked when any of the following is true:
@@ -35,6 +41,7 @@ resource-safety fix, changed compiler code generation, or intentionally
 stronger ownership guarantees. An unexplained material regression remains
 blocking.
 
-The 10/1K/1M cases and other large-data benchmarks run only in the manual or
-tag-triggered release workflow, not as a timing gate on every pull request.
-Ordinary CI retains the targeted allocation tests as the fast hard gate.
+The 10/1K/1M cases and other large-data benchmarks run only in the pre-tag
+manual qualification and tag-triggered audit, not as a timing gate on every
+pull request. Ordinary CI retains the targeted allocation tests as the fast
+hard gate.
