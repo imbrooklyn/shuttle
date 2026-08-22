@@ -6,8 +6,11 @@ breaking changes remain possible and must be called out explicitly.
 
 ## Unreleased
 
-This section is the draft release note for Shuttle's first public pre-v1
-version.
+No changes yet.
+
+## [0.1.0] - 2026-08-22
+
+Initial public pre-v1 release.
 
 ### Added
 
@@ -21,11 +24,15 @@ version.
   stateful operators, terminals, iterator adapters, and Optional integration.
 - Executable package examples and a complete animals example.
 - Multi-platform native tests, race tests, cross-compilation, bounded fuzzing,
-  static analysis, vulnerability scanning, public API snapshots, and release
-  benchmark comparison.
+  minute-scale release fuzz qualification, static analysis, vulnerability
+  scanning, public API snapshots, and release benchmark comparison.
 
 ### Release notes
 
 - Go 1.27.0 is the initial minimum and release-validation toolchain.
 - Runtime packages use only the Go standard library.
 - The public API remains unstable until `v1.0.0`.
+- The release API review is recorded in
+  [`docs/releases/v0.1.0-api-freeze.md`](docs/releases/v0.1.0-api-freeze.md).
+
+[0.1.0]: https://github.com/imbrooklyn/shuttle/releases/tag/v0.1.0

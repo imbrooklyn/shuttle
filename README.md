@@ -39,6 +39,14 @@ baseline is Go 1.27.0.
 The complete rationale and behavioral contract are in [DESIGN.md](DESIGN.md)
 and [API_SPEC.md](API_SPEC.md).
 
+## Installation
+
+Install the first public pre-v1 release from a module using Go 1.27 or newer:
+
+```bash
+go get github.com/imbrooklyn/shuttle@v0.1.0
+```
+
 ## Usage
 
 ```go

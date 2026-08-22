@@ -1,0 +1,106 @@
+name: Release Fuzz
+
+run-name: Release fuzz ${{ inputs.expected_sha }} (${{ inputs.fuzztime }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Full 40-character candidate commit SHA expected at the selected ref
+        required: true
+        type: string
+      fuzztime:
+        description: Time spent on each fuzz target
+        required: true
+        default: 1m
+        type: choice
+        options:
+          - 1m
+          - 2m
+          - 5m
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.27.0'
+  GOTOOLCHAIN: local
+
+jobs:
+  release-fuzz:
+    name: Release fuzz (${{ matrix.package }} / ${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: optional
+            target: FuzzOptionalJSON
+          - package: comparator
+            target: FuzzReverseLaws
+          - package: comparator
+            target: FuzzThenMatchesReference
+          - package: comparator
+            target: FuzzFluentCompositionMatchesReference
+          - package: comparator
+            target: FuzzByMatchesCompare
+          - package: comparator
+            target: FuzzAscendingDescendingKeyOrder
+          - package: comparator
+            target: FuzzGeneratedOrderingLaws
+          - package: predicate
+            target: FuzzDoubleNegation
+          - package: predicate
+            target: FuzzBooleanLaws
+          - package: predicate
+            target: FuzzIsNotNilNegation
+          - package: predicate
+            target: FuzzCompositionMatchesReference
+          - package: stream
+            target: FuzzStreamFiniteProperties
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+      - name: Verify exact release candidate
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "expected_sha must be a full 40-character commit SHA"
+            exit 1
+          fi
+          candidate_sha="$(git rev-parse HEAD)"
+          if [[ "${candidate_sha}" != "${EXPECTED_SHA,,}" ]]; then
+            echo "Selected ref resolved to ${candidate_sha}, expected ${EXPECTED_SHA}"
+            exit 1
+          fi
+          echo "Qualified candidate: ${candidate_sha}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Run release fuzz target
+        shell: bash
+        env:
+          FUZZTIME: ${{ inputs.fuzztime }}
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+        run: go test "./${PACKAGE}" -run='^$' -fuzz="^${TARGET}$" -fuzztime="${FUZZTIME}"
+
+  release-fuzz-gate:
+    name: Release Fuzz Gate
+    if: ${{ always() }}
+    needs: release-fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every release fuzz target to succeed
+        shell: bash
+        env:
+          RELEASE_FUZZ_RESULT: ${{ needs.release-fuzz.result }}
+        run: |
+          if [[ "${RELEASE_FUZZ_RESULT}" != "success" ]]; then
+            echo "Release fuzz concluded with ${RELEASE_FUZZ_RESULT}"
+            exit 1
+          fi

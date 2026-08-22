@@ -3,6 +3,10 @@ name: Benchmarks
 on:
   workflow_dispatch:
     inputs:
+      expected_sha:
+        description: Full 40-character candidate commit SHA expected at the selected ref
+        required: true
+        type: string
       base_ref:
         description: Optional tag, branch, or commit to use as the benchmark baseline
         required: false
@@ -40,6 +44,7 @@ jobs:
         working-directory: candidate
         shell: bash
         env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
           REQUESTED_BASE: ${{ inputs.base_ref }}
         run: |
           base_ref="${REQUESTED_BASE}"
@@ -55,6 +60,16 @@ jobs:
             base_ref="${INITIAL_BENCHMARK_BASE}"
           fi
           candidate_sha="$(git rev-parse HEAD)"
+          if [[ -n "${EXPECTED_SHA}" ]]; then
+            if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "expected_sha must be a full 40-character commit SHA"
+              exit 1
+            fi
+            if [[ "${candidate_sha}" != "${EXPECTED_SHA,,}" ]]; then
+              echo "Selected ref resolved to ${candidate_sha}, expected ${EXPECTED_SHA}"
+              exit 1
+            fi
+          fi
           base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"
           if [[ "${candidate_sha}" == "${base_sha}" ]]; then
             echo "Benchmark candidate and baseline resolve to the same commit: ${candidate_sha}"

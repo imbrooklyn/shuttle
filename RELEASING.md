@@ -50,11 +50,25 @@ Release tools must be installed after selecting the pinned Go toolchain. A tool
 binary built with an older Go version may not parse Go 1.27 generic methods. The
 versions in `.github/workflows/ci.yml` are the source of truth.
 
-## 3. Qualify performance before tagging
+## 3. Run release fuzzing
+
+Manually dispatch `.github/workflows/release-fuzz.yml` against the fixed release
+branch. Supply the full candidate commit as `expected_sha` and select at least
+`1m` per target (`5m` is available for higher-risk releases). The workflow
+validates that the selected ref resolves to the expected commit and runs every
+committed fuzz target independently. Record the successful workflow URL.
+
+The 10-second, two-architecture fuzz jobs in ordinary CI remain fast smoke
+coverage; they do not replace this release qualification.
+
+Do not create the tag until `Release Fuzz Gate` succeeds on the candidate SHA.
+
+## 4. Qualify performance before tagging
 
 Manually dispatch `.github/workflows/benchmarks.yml` against the fixed release
-branch. Supply the previous public tag as `base_ref`; for the first release,
-leave it empty so the workflow uses the recorded initial baseline.
+branch. Supply the full candidate commit as `expected_sha` and the previous
+public tag as `base_ref`; for the first release, use the recorded initial
+baseline commit explicitly.
 
 Review the retained `baseline.txt`, `candidate.txt`, and `benchstat.txt` under
 the policy in [BENCHMARKS.md](BENCHMARKS.md). Record every accepted material
@@ -63,12 +77,13 @@ does not satisfy the release gate.
 
 Do not create the tag until this step is complete.
 
-## 4. Record approval
+## 5. Record approval
 
 Prepare the GitHub release as a draft. Its notes must identify:
 
 - version and exact candidate SHA;
 - ordinary CI run URL;
+- release fuzz run URL and per-target duration;
 - pre-tag benchmark run URL, baseline, and classification;
 - vulnerability database timestamp;
 - public API diff classification;
@@ -78,7 +93,7 @@ Prepare the GitHub release as a draft. Its notes must identify:
 For `v1.0.0` and later, explicitly confirm every item in the Release Definition
 of Done in [API_SPEC.md](API_SPEC.md).
 
-## 5. Publish
+## 6. Publish
 
 Create a signed annotated tag on the approved SHA and push only that tag:
 
@@ -94,7 +109,7 @@ stage. Publish the prepared GitHub release only after the tag is visible. The
 tag-triggered benchmark workflow is a post-publication audit and must resolve to
 the same candidate SHA as the pre-tag run.
 
-## 6. Verify distribution
+## 7. Verify distribution
 
 From a clean temporary module, verify that the public Go proxy can resolve the
 new tag and enumerate every package:
