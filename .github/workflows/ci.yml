@@ -122,7 +122,7 @@ jobs:
           check-latest: false
       - name: Install pinned analysis tools
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2026.2rc1
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
       - run: staticcheck ./...
       - run: govulncheck ./...
@@ -188,3 +188,42 @@ jobs:
           cat "${RUNNER_TEMP}/api-baseline.diff"
           echo "Public API or GoDoc differs from api/shuttle-v1.txt. Review the change and regenerate the baseline explicitly."
           exit 1
+
+  ci-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs:
+      - native-test
+      - cross-compile
+      - fuzz
+      - analysis
+      - public-api
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          NATIVE_TEST_RESULT: ${{ needs.native-test.result }}
+          CROSS_COMPILE_RESULT: ${{ needs.cross-compile.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+          ANALYSIS_RESULT: ${{ needs.analysis.result }}
+          PUBLIC_API_RESULT: ${{ needs.public-api.result }}
+        shell: bash
+        run: |
+          failures=0
+          for job_result in \
+            "native-test=${NATIVE_TEST_RESULT}" \
+            "cross-compile=${CROSS_COMPILE_RESULT}" \
+            "fuzz=${FUZZ_RESULT}" \
+            "analysis=${ANALYSIS_RESULT}" \
+            "public-api=${PUBLIC_API_RESULT}"; do
+            job="${job_result%%=*}"
+            result="${job_result#*=}"
+            if [[ "${result}" != "success" ]]; then
+              echo "${job} concluded with ${result}"
+              failures=$((failures + 1))
+            fi
+          done
+          if ((failures != 0)); then
+            exit 1
+          fi

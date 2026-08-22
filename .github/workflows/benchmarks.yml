@@ -54,9 +54,20 @@ jobs:
           if [[ -z "${base_ref}" ]]; then
             base_ref="${INITIAL_BENCHMARK_BASE}"
           fi
-          git rev-parse --verify "${base_ref}^{commit}"
+          candidate_sha="$(git rev-parse HEAD)"
+          base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"
+          if [[ "${candidate_sha}" == "${base_sha}" ]]; then
+            echo "Benchmark candidate and baseline resolve to the same commit: ${candidate_sha}"
+            exit 1
+          fi
           echo "ref=${base_ref}" >> "${GITHUB_OUTPUT}"
-          echo "Using benchmark baseline ${base_ref}"
+          echo "candidate_sha=${candidate_sha}" >> "${GITHUB_OUTPUT}"
+          echo "base_sha=${base_sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo '### Benchmark qualification'
+            echo "- Candidate: \`${candidate_sha}\`"
+            echo "- Baseline: \`${base_ref}\` (\`${base_sha}\`)"
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Check out benchmark baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +95,7 @@ jobs:
       - name: Upload raw benchmarks and comparison
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: benchmarks-${{ github.sha }}
+          name: benchmarks-${{ steps.baseline.outputs.candidate_sha }}
           path: |
             ${{ runner.temp }}/baseline.txt
             ${{ runner.temp }}/candidate.txt
