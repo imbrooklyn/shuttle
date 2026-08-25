@@ -8,10 +8,6 @@
   Production-grade typed composition primitives for Go.
 </p>
 
-<p align="center">
-  <img src="docs/assets/shuttle-cover.png" alt="Shuttle project cover" width="100%">
-</p>
-
 <!-- markdownlint-disable MD013 -->
 
 Shuttle's v1 scope is intentionally narrow: composable `comparator.Func[T]`
@@ -25,6 +21,10 @@ baseline is Go 1.27.0.
 > [!IMPORTANT]
 > Shuttle has not published a stable v1 release. Pre-v1 versions are intended
 > for evaluation and may change incompatibly after review.
+
+<p align="center">
+  <img src="docs/assets/shuttle-cover.png" alt="Shuttle project cover" width="720">
+</p>
 
 ## Packages
 
