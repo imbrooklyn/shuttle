@@ -1,10 +1,17 @@
-# Shuttle
+<p align="center">
+  <img src="docs/assets/shuttle-logo.png" alt="Shuttle logo" width="160">
+</p>
+
+<h1 align="center">Shuttle</h1>
+
+<p align="center">
+  Production-grade typed composition primitives for Go.
+</p>
 
 <!-- markdownlint-disable MD013 -->
 
-Shuttle provides production-grade typed composition primitives for Go. Its v1
-scope is intentionally narrow: composable `comparator.Func[T]` and
-`predicate.Func[T]` values, an eager `Optional[T]`, and a lazy, ordered,
+Shuttle's v1 scope is intentionally narrow: composable `comparator.Func[T]`
+and `predicate.Func[T]` values, an eager `Optional[T]`, and a lazy, ordered,
 sequential `Stream[T]`.
 
 Shuttle requires Go 1.27 or newer because its fluent type-changing operations
@@ -14,6 +21,10 @@ baseline is Go 1.27.0.
 > [!IMPORTANT]
 > Shuttle has not published a stable v1 release. Pre-v1 versions are intended
 > for evaluation and may change incompatibly after review.
+
+<p align="center">
+  <img src="docs/assets/shuttle-cover.png" alt="Shuttle project cover" width="720">
+</p>
 
 ## Packages
 

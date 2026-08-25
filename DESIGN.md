@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="README.md">
+    <img src="docs/assets/shuttle-logo.png" alt="Shuttle logo" width="96">
+  </a>
+</p>
+
 # Shuttle Design
 
 <!-- markdownlint-disable MD013 MD024 -->
