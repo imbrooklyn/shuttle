@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="docs/assets/shuttle-logo.png" alt="Shuttle logo" width="160">
+</p>
+
 # Shuttle
+
+![Shuttle project cover](docs/assets/shuttle-cover.png)
 
 <!-- markdownlint-disable MD013 -->
 
